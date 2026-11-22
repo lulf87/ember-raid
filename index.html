@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>余烬 · 原型</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #05040a; }
+  canvas { display: block; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<!-- 平台层：迁移微信小游戏时替换为 platform.wx.js -->
+<script src="src/platform/platform.h5.js"></script>
+<!-- 引擎 -->
+<script src="src/engine/util.js"></script>
+<script src="src/engine/audio.js"></script>
+<script src="src/engine/ui.js"></script>
+<script src="src/engine/fx.js"></script>
+<script src="src/engine/app.js"></script>
+<script src="src/engine/ads.js"></script>
+<!-- 共享系统 -->
+<script src="src/shared/loot.js"></script>
+<script src="src/shared/chest.js"></script>
+<!-- 三个原型 -->
+<script src="src/games/raid.js"></script>
+<script src="src/games/idle.js"></script>
+<script src="src/games/survivor.js"></script>
+<!-- 场景与入口 -->
+<script src="src/scenes/menu.js"></script>
+<script src="src/main.js"></script>
+</body>
+</html>
