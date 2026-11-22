@@ -1,22 +1,23 @@
 /**
  * 原型 C：《灰烬独行者》—— 竖屏割草肉鸽
- * 单指虚拟摇杆走位，自动攻击；升级三选一构筑技能；坚持 5 分钟击败烬王；局外余烬永久成长。
+ * 单指虚拟摇杆走位，自动攻击；升级三选一构筑技能；坚持 3 分钟击败烬王；局外余烬永久成长。
  */
 (function () {
   'use strict';
   var ER = window.ER, U = ER.U, G = ER.G, A = ER.audio, P = ER.platform;
   var SAVE_KEY = 'er_surv_v1';
-  var RUN_GOAL = 300; // 5 分钟
+  var RUN_GOAL = 180; // 3 分钟
   var MAX_ENEMIES = 260;
 
   var CLASSES = {
-    warrior: { name: '铁誓战士', desc: '皮糙肉厚，旋风斩清场', color: '#5b8cff', hp: 170, speed: 178, start: 'whirl', glyph: 'shield' },
-    mage: { name: '焰歌法师', desc: '余烬飞弹，远程追踪', color: '#ff6b4a', hp: 100, speed: 195, start: 'missile', glyph: 'flame' },
-    priest: { name: '晨辉祭司', desc: '贯穿射线，持续回复', color: '#7dffb0', hp: 125, speed: 188, start: 'beam', glyph: 'cross', regen: 1.2 },
+    warrior: { name: '铁誓战士', desc: '皮糙肉厚，近身横扫', color: '#5b8cff', hp: 170, speed: 182, start: 'cleave', glyph: 'shield', kind: 'warrior' },
+    mage: { name: '焰歌法师', desc: '余烬飞弹，远程追踪', color: '#ff6b4a', hp: 100, speed: 195, start: 'missile', glyph: 'flame', kind: 'mage' },
+    priest: { name: '晨辉祭司', desc: '贯穿射线，持续回复', color: '#7dffb0', hp: 125, speed: 188, start: 'beam', glyph: 'cross', regen: 1.2, kind: 'priest' },
   };
   var CLASS_ORDER = ['warrior', 'mage', 'priest'];
 
   var SKILLS = {
+    cleave: { name: '裂地斩', color: '#dfe8ff', desc: function (l) { return '朝最近的敌人挥剑横扫，范围 ' + (100 + 10 * l) + '，伤害 ' + (20 + 9 * l); } },
     missile: { name: '余烬飞弹', color: '#ff8a3a', desc: function (l) { return '自动追踪敌人，数量 ' + (1 + Math.floor(l / 2)) + '，伤害 ' + (14 + 7 * l); } },
     whirl: { name: '旋风斩', color: '#9ab8ff', desc: function (l) { return '周期性环身横扫，范围 ' + (80 + 16 * l) + '，伤害 ' + (22 + 9 * l); } },
     beam: { name: '晨辉射线', color: '#fff2a0', desc: function (l) { return '贯穿一条直线的圣光，伤害 ' + (26 + 11 * l); } },
@@ -41,11 +42,11 @@
   function metaCost(lv) { return 20 + lv * 18; }
 
   var ENEMY = {
-    imp: { hp: 12, speed: 78, dmg: 8, r: 13, color: '#ff5a4a', xp: 1 },
-    bat: { hp: 8, speed: 128, dmg: 6, r: 10, color: '#b35cff', xp: 1 },
-    ghoul: { hp: 42, speed: 48, dmg: 14, r: 18, color: '#7ad04a', xp: 3 },
-    elite: { hp: 700, speed: 62, dmg: 26, r: 34, color: '#ff9a2a', xp: 30, elite: true },
-    boss: { hp: 9000, speed: 70, dmg: 40, r: 58, color: '#ff3a1a', xp: 0, boss: true },
+    imp: { hp: 8, speed: 78, dmg: 8, r: 13, color: '#ff5a4a', xp: 1 },
+    bat: { hp: 6, speed: 128, dmg: 6, r: 10, color: '#b35cff', xp: 1 },
+    ghoul: { hp: 26, speed: 48, dmg: 14, r: 18, color: '#7ad04a', xp: 3 },
+    elite: { hp: 360, speed: 62, dmg: 26, r: 34, color: '#ff9a2a', xp: 30, elite: true },
+    boss: { hp: 3500, speed: 70, dmg: 40, r: 58, color: '#ff3a1a', xp: 0, boss: true },
   };
 
   function loadSave() {
@@ -103,7 +104,7 @@
     this.xp = 0;
     this.xpNeed = 5;
     this.spawnAcc = 0;
-    this.eliteT = 60;
+    this.eliteT = 45;
     this.bossSpawned = false;
     this.state = 'play';
     this.levelChoices = null;
@@ -113,7 +114,11 @@
     this.orbAngle = 0;
     this.pendingLevels = 0;
     this.paused = false;
-    this.banner = { s: '坚持 5 分钟，击败烬王！', t: 3, c: '#ffd27a' };
+    this.banner = { s: '坚持 3 分钟，击败烬王！', t: 3, c: '#ffd27a' };
+    this.hitStop = 0;
+    this.runEmbers = 0;
+    this.hero.walk = 0;
+    this.hero.atk = 0;
     this.grid = new Map();
   }
 
@@ -178,7 +183,7 @@
     var D = ENEMY[type];
     var a = Math.random() * Math.PI * 2;
     var dist = type === 'boss' ? 420 : U.rand(560, 640);
-    var hpMul = 1 + (this.t / 60) * 0.55;
+    var hpMul = 1 + (this.t / 60) * 0.4;
     var e = {
       type: type, D: D, x: this.hero.x + Math.cos(a) * dist, y: this.hero.y + Math.sin(a) * dist * 1.1,
       hp: D.hp * hpMul, max: D.hp * hpMul, r: D.r, speed: D.speed * U.rand(0.9, 1.1), hurt: 0, slowT: 0, atkT: 0,
@@ -190,6 +195,9 @@
 
   Run.prototype.update = function (dt) {
     if (this.paused) return;
+    if (this.hitStop > 0) { this.hitStop -= dt; this.fx.update(dt * 0.2); return; }
+    this.hero.atk = Math.max(0, this.hero.atk - dt * 3.5);
+    this.hero.walk += dt * (this.hero.moving ? 13 : 2);
     this.fx.update(dt);
     if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
     if (this.state !== 'play') return;
@@ -222,7 +230,7 @@
     }
     this.eliteT -= dt;
     if (this.eliteT <= 0 && !this.bossSpawned) {
-      this.eliteT = 60;
+      this.eliteT = 45;
       this.spawn('elite');
       this.banner = { s: '精英怪出现！击杀掉落宝箱', t: 2, c: '#ffb347' };
       A.play('warn');
@@ -230,7 +238,7 @@
     if (!this.bossSpawned && this.t >= RUN_GOAL) {
       this.bossSpawned = true;
       this.boss = this.spawn('boss');
-      this.boss.hp = this.boss.max = 9000 * (1 + this.level * 0.05);
+      this.boss.hp = this.boss.max = 3500 * (1 + this.level * 0.06);
       this.banner = { s: '烬王·末焰 降临！', t: 3, c: '#ff5a3a' };
       this.fx.shake(14, 0.8);
       this.fx.flash('#ff3a1a', 0.4, 1.5);
@@ -319,7 +327,10 @@
     this.kills++;
     this.fx.burst(e.x, e.y, { n: e.D.boss ? 120 : e.D.elite ? 40 : 7, colors: [e.D.color, color || '#fff'], speed: e.D.boss ? 600 : 200, life: e.D.boss ? 1.4 : 0.4, size: e.D.elite ? 6 : 3.5 });
     A.play('hit', 0.04);
-    if (e.D.xp) this.gems.push({ x: e.x, y: e.y, v: e.D.xp, big: e.D.xp >= 3 });
+    if (e.D.xp) this.gems.push({ x: e.x, y: e.y, v: e.D.xp, big: e.D.xp >= 3, kind: 'xp' });
+    if (Math.random() < 0.08) this.gems.push({ x: e.x + U.rand(-10, 10), y: e.y + U.rand(-10, 10), v: 1, kind: 'ember' });
+    if (Math.random() < 0.012 || e.D.elite) this.gems.push({ x: e.x + 14, y: e.y, v: 30, kind: 'heal' });
+    if (e.D.elite) this.hitStop = 0.09;
     if (this.gems.length > 320) {
       var g0 = this.gems.shift();
       this.gems[this.gems.length - 1].v += g0.v;
@@ -347,8 +358,31 @@
       return false;
     }
     var L;
+    if ((L = sk.cleave)) {
+      var CR = 100 + 10 * L;
+      var ct = this.nearest(h.x, h.y, CR + 20);
+      if (ct && ready('cleave', Math.max(0.32, 0.62 - L * 0.05))) {
+        var ca = Math.atan2(ct.y - h.y, ct.x - h.x);
+        h.face = Math.cos(ca) >= 0 ? 1 : -1;
+        h.atk = 1;
+        var arc = 1.15;
+        this.query(h.x, h.y, CR + 30, tmp);
+        var cl = tmp.slice();
+        for (var ci = 0; ci < cl.length; ci++) {
+          var ce = cl[ci];
+          var cdx = ce.x - h.x, cdy = ce.y - h.y;
+          var cdist = Math.sqrt(cdx * cdx + cdy * cdy);
+          if (cdist > CR + ce.r) continue;
+          var da = Math.atan2(Math.sin(Math.atan2(cdy, cdx) - ca), Math.cos(Math.atan2(cdy, cdx) - ca));
+          if (Math.abs(da) > arc && cdist > ce.r + h.r) continue;
+          this.damage(ce, 20 + 9 * L, '#dfe8ff', { x: (cdx / (cdist || 1)) * 420, y: (cdy / (cdist || 1)) * 420 });
+        }
+        this.bolts.push({ kind: 'cleave', x: h.x, y: h.y, a: ca, r: CR, arc: arc, t: 0, dur: 0.18 });
+        A.play('slash', 0.05);
+      }
+    }
     if ((L = sk.missile)) {
-      if (ready('missile', Math.max(0.35, 0.85 - L * 0.08))) {
+      if (ready('missile', Math.max(0.28, 0.6 - L * 0.06))) {
         var n = 1 + Math.floor(L / 2);
         var used = [];
         for (var i = 0; i < n; i++) {
@@ -358,7 +392,7 @@
           var a = Math.atan2(tg.y - h.y, tg.x - h.x) + U.rand(-0.3, 0.3);
           this.projs.push({ kind: 'missile', x: h.x, y: h.y, vx: Math.cos(a) * 420, vy: Math.sin(a) * 420, target: tg, dmg: 14 + 7 * L, life: 1.6, r: 8 });
         }
-        if (used.length) A.play('fire', 0.08);
+        if (used.length) { A.play('fire', 0.08); h.atk = 1; h.face = used[0].x >= h.x ? 1 : -1; }
       }
     }
     if ((L = sk.whirl)) {
@@ -381,7 +415,7 @@
       }
     }
     if ((L = sk.beam)) {
-      if (ready('beam', Math.max(0.7, 1.6 - L * 0.15))) {
+      if (ready('beam', Math.max(0.5, 1.05 - L * 0.1))) {
         var bt = this.nearest(h.x, h.y, 500);
         if (bt) {
           var ang = Math.atan2(bt.y - h.y, bt.x - h.x);
@@ -401,6 +435,7 @@
             this.bolts.push({ kind: 'beam', x: h.x, y: h.y, a: aa, len: len, w: wdt, t: 0, dur: 0.25 });
           }
           A.play('heal', 0.1);
+          h.atk = 1; h.face = Math.cos(ang) >= 0 ? 1 : -1;
         }
       }
     }
@@ -500,8 +535,18 @@
       }
       if (d < h.r + 6) {
         this.gems.splice(i, 1);
-        this.gainXp(g.v);
-        A.play('pickup', 0.03);
+        if (g.kind === 'heal') {
+          h.hp = Math.min(h.maxHp, h.hp + g.v);
+          this.fx.text(h.x, h.y - 50, '+' + g.v + ' 生命', { color: '#7dff9a', size: 20, crit: true });
+          A.play('heal');
+        } else if (g.kind === 'ember') {
+          this.runEmbers += g.v;
+          this.fx.text(h.x, h.y - 50, '余烬 +1', { color: '#ffb347', size: 17 });
+          A.play('coin', 0.05);
+        } else {
+          this.gainXp(g.v);
+          A.play('pickup', 0.03);
+        }
       }
     }
     for (var c = this.chests.length - 1; c >= 0; c--) {
@@ -561,6 +606,7 @@
   };
 
   Run.prototype.pickChoice = function (k) {
+    if (!this.save.tutSurv) { this.save.tutSurv = true; writeSave(this.save); }
     this.applySkill(k);
     this.levelChoices = null;
     this.state = 'play';
@@ -605,7 +651,7 @@
 
   Run.prototype.rewards = function () {
     var win = this.state === 'win';
-    return Math.floor(this.kills / 8 + this.t / 6 + (win ? 60 : 0));
+    return Math.floor(this.kills / 8 + this.t / 5 + (win ? 60 : 0) + this.runEmbers);
   };
 
   Run.prototype.finish = function (mult) {
@@ -653,15 +699,41 @@
     for (i = 0; i < this.gems.length; i++) {
       var g = this.gems[i];
       if (Math.abs(g.x - h.x) > 320 || Math.abs(g.y - h.y) > 560) continue;
-      ctx.fillStyle = g.big ? '#5ae0ff' : '#7dff9a';
-      var gs = g.big ? 7 : 5;
-      ctx.beginPath(); ctx.moveTo(g.x, g.y - gs); ctx.lineTo(g.x + gs * 0.7, g.y); ctx.lineTo(g.x, g.y + gs); ctx.lineTo(g.x - gs * 0.7, g.y); ctx.closePath(); ctx.fill();
+      var gy = g.y + Math.sin(this.t * 4 + g.x) * 2;
+      if (g.kind === 'heal') {
+        G.glow(ctx, g.x, gy, 26, '#ff6a6a', 0.5);
+        ctx.fillStyle = '#c8553a'; ctx.strokeStyle = '#1b1222'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.ellipse(g.x, gy, 10, 7, -0.4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#f2e6d0'; ctx.fillRect(g.x + 6, gy - 9, 4, 8);
+        continue;
+      }
+      if (g.kind === 'ember') {
+        G.glow(ctx, g.x, gy, 20, '#ffb347', 0.7);
+        ctx.fillStyle = '#ffd24a'; ctx.strokeStyle = '#7a3a00'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(g.x, gy, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        continue;
+      }
+      var gc = g.big ? '#5ae0ff' : '#7dff9a';
+      G.glow(ctx, g.x, gy, g.big ? 22 : 16, gc, 0.55);
+      ctx.fillStyle = gc; ctx.strokeStyle = '#0a2a1a'; ctx.lineWidth = 1.5;
+      var gs = g.big ? 10 : 7;
+      ctx.beginPath(); ctx.moveTo(g.x, gy - gs); ctx.lineTo(g.x + gs * 0.7, gy); ctx.lineTo(g.x, gy + gs); ctx.lineTo(g.x - gs * 0.7, gy); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.fillRect(g.x - 1.5, gy - gs * 0.6, 2, gs * 0.5);
     }
     // 宝箱
     for (i = 0; i < this.chests.length; i++) {
       var c = this.chests[i];
-      G.glow(ctx, c.x, c.y, 50, '#ffd27a', 0.5 + Math.sin(this.t * 5) * 0.2);
-      ER.drawChest(ctx, c.x, c.y + Math.sin(this.t * 4) * 3, 0.3, 0, '#ffd27a', 0);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      var cpg = ctx.createLinearGradient(0, c.y - 300, 0, c.y);
+      cpg.addColorStop(0, 'rgba(255,210,122,0)');
+      cpg.addColorStop(1, 'rgba(255,210,122,0.5)');
+      ctx.fillStyle = cpg;
+      ctx.fillRect(c.x - 30, c.y - 300, 60, 300);
+      ctx.restore();
+      G.glow(ctx, c.x, c.y, 70, '#ffd27a', 0.5 + Math.sin(this.t * 5) * 0.2);
+      ER.drawChest(ctx, c.x, c.y + Math.sin(this.t * 4) * 3, 0.42, 0, '#ffd27a', 0);
+      G.text(ctx, '宝箱', c.x, c.y - 48, { size: 16, weight: 'bold', align: 'center', color: '#ffd27a', stroke: '#000', strokeWidth: 4 });
     }
     // 敌人
     for (i = 0; i < this.enemies.length; i++) {
@@ -704,7 +776,17 @@
       var k = 1 - b.t / b.dur;
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      if (b.kind === 'beam') {
+      if (b.kind === 'cleave') {
+        ctx.translate(b.x, b.y);
+        ctx.rotate(b.a);
+        var sweep = (1 - k);
+        ctx.fillStyle = 'rgba(220,232,255,' + 0.45 * k + ')';
+        ctx.beginPath(); ctx.moveTo(0, 0);
+        ctx.arc(0, 0, b.r, -b.arc, -b.arc + b.arc * 2 * Math.min(1, sweep * 2 + 0.2)); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,' + k + ')';
+        ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.arc(0, 0, b.r * 0.92, -b.arc, -b.arc + b.arc * 2 * Math.min(1, sweep * 2 + 0.2)); ctx.stroke();
+      } else if (b.kind === 'beam') {
         ctx.translate(b.x, b.y);
         ctx.rotate(b.a);
         ctx.fillStyle = 'rgba(255,242,160,' + 0.5 * k + ')';
@@ -760,74 +842,26 @@
     }
   };
 
+  var MON_OF = { imp: 'imp', bat: 'bat', ghoul: 'ghoul', elite: 'brute', boss: 'king' };
   Run.prototype.drawEnemy = function (ctx, e) {
     var D = e.D;
-    ctx.save();
-    ctx.translate(e.x, e.y);
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.beginPath(); ctx.ellipse(0, e.r * 0.8, e.r, e.r * 0.35, 0, 0, Math.PI * 2); ctx.fill();
-    if (D.elite || D.boss) G.glow(ctx, 0, 0, e.r * 2.2, D.color, 0.45);
-    var col = e.slowT > 0 ? U.mix(D.color, '#bfe8ff', 0.6) : D.color;
-    var bob = Math.sin(this.t * 8 + e.phase) * 0.08;
-    ctx.scale(1 + bob, 1 - bob);
-    ctx.fillStyle = col;
-    if (e.type === 'bat') {
-      var flap = Math.sin(this.t * 20 + e.phase) * 0.6;
-      ctx.beginPath();
-      ctx.moveTo(0, 0); ctx.quadraticCurveTo(-e.r * 1.6, -e.r * (1 + flap), -e.r * 2, e.r * 0.3); ctx.quadraticCurveTo(-e.r, 0, 0, e.r * 0.4);
-      ctx.quadraticCurveTo(e.r, 0, e.r * 2, e.r * 0.3); ctx.quadraticCurveTo(e.r * 1.6, -e.r * (1 + flap), 0, 0);
-      ctx.fill();
-    }
-    ctx.beginPath(); ctx.arc(0, 0, e.r, 0, Math.PI * 2); ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = U.mix(D.color, '#000000', 0.6);
-    ctx.stroke();
-    if (D.boss || D.elite) {
-      ctx.fillStyle = '#ffd24a';
-      ctx.beginPath();
-      for (var s = 0; s < 5; s++) {
-        var a = -Math.PI / 2 + (s - 2) * 0.35;
-        ctx.lineTo(Math.cos(a) * e.r * 0.9, Math.sin(a) * e.r * 0.9);
-        ctx.lineTo(Math.cos(a + 0.17) * e.r * 1.35, Math.sin(a + 0.17) * e.r * 1.35);
-      }
-      ctx.closePath(); ctx.fill();
-    }
-    var dx = this.hero.x - e.x, dy = this.hero.y - e.y, dl = Math.sqrt(dx * dx + dy * dy) || 1;
-    var ex = (dx / dl) * e.r * 0.25, ey = (dy / dl) * e.r * 0.25;
-    ctx.fillStyle = D.boss ? '#fff2a0' : '#fff';
-    ctx.beginPath(); ctx.arc(-e.r * 0.35 + ex, -e.r * 0.15 + ey, e.r * 0.22, 0, Math.PI * 2); ctx.arc(e.r * 0.35 + ex, -e.r * 0.15 + ey, e.r * 0.22, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#140c18';
-    ctx.beginPath(); ctx.arc(-e.r * 0.35 + ex * 1.4, -e.r * 0.15 + ey * 1.4, e.r * 0.1, 0, Math.PI * 2); ctx.arc(e.r * 0.35 + ex * 1.4, -e.r * 0.15 + ey * 1.4, e.r * 0.1, 0, Math.PI * 2); ctx.fill();
-    if (e.hurt > 0) {
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      ctx.beginPath(); ctx.arc(0, 0, e.r, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.restore();
+    var type = MON_OF[e.type];
+    var size = D.boss ? 170 : D.elite ? 100 : e.r * 2.9;
+    if (D.elite || D.boss) G.glow(ctx, e.x, e.y - size * 0.4, size * 0.9, D.color, 0.35);
+    var face = this.hero.x >= e.x ? 1 : -1;
+    var lift = e.type === 'bat' ? 8 : 0;
+    var tint = e.slowT > 0 ? '#9ad0ff' : null;
+    ER.Sprites.blitMonster(ctx, type, e.x, e.y + e.r * 0.8 - lift, size, this.t * (e.speed / 70) + e.phase, face, tint, e.hurt > 0);
     if ((D.elite || D.boss) && e.hp < e.max) {
-      G.bar(ctx, e.x - e.r, e.y - e.r - 16, e.r * 2, 7, e.hp / e.max, '#d8362a', { border: false });
+      G.bar(ctx, e.x - 40, e.y - size * 0.95, 80, 8, e.hp / e.max, '#d8362a', { border: false });
     }
   };
 
   Run.prototype.drawHero = function (ctx) {
     var h = this.hero, C = this.C;
-    ctx.save();
-    ctx.translate(h.x, h.y);
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.beginPath(); ctx.ellipse(0, 14, 16, 6, 0, 0, Math.PI * 2); ctx.fill();
-    G.glow(ctx, 0, 0, 60, C.color, 0.25);
-    var bob = h.moving ? Math.sin(this.t * 16) * 2 : 0;
-    ctx.translate(0, bob);
-    var grd = ctx.createRadialGradient(-5, -5, 2, 0, 0, 18);
-    grd.addColorStop(0, U.mix(C.color, '#ffffff', 0.5));
-    grd.addColorStop(1, C.color);
-    ctx.fillStyle = grd;
-    ctx.beginPath(); ctx.arc(0, 0, h.r, 0, Math.PI * 2); ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = h.hurtT > 0 ? '#ff3030' : '#fff';
-    ctx.stroke();
-    drawGlyph(ctx, C.glyph, 17, 'rgba(20,12,30,0.85)');
-    ctx.restore();
-    G.bar(ctx, h.x - 22, h.y + 24, 44, 6, h.hp / h.maxHp, '#5ae05a', { border: false });
+    G.glow(ctx, h.x, h.y, 70, C.color, 0.22);
+    ER.Sprites.drawHero(ctx, h.x, h.y + 16, { kind: C.kind, face: h.face, walk: h.walk, moving: h.moving, atk: h.atk, hurt: h.hurtT, s: 1.15 });
+    G.bar(ctx, h.x - 24, h.y + 24, 48, 7, h.hp / h.maxHp, h.hp / h.maxHp < 0.3 ? '#ff4a4a' : '#5ae05a', { border: false });
   };
 
   Run.prototype.renderHud = function (ctx) {
@@ -859,11 +893,35 @@
       G.text(ctx, this.banner.s, 270, 150, { size: 22, weight: 'bold', align: 'center', color: this.banner.c, stroke: '#000', strokeWidth: 5 });
       ctx.restore();
     }
-    if (this.t < 5) {
-      ctx.save();
-      ctx.globalAlpha = Math.min(1, 5 - this.t);
-      G.text(ctx, '按住屏幕任意位置拖动 = 虚拟摇杆', 270, 760, { size: 18, align: 'center', color: '#ddd' });
-      ctx.restore();
+    if (this.runEmbers) G.text(ctx, '余烬 +' + this.runEmbers, 524, 64, { size: 14, align: 'right', color: '#ffb347' });
+    if (!this.bossSpawned) G.text(ctx, '目标：存活到倒计时结束', 270, 76, { size: 14, align: 'center', color: 'rgba(255,220,170,0.8)' });
+    var h = this.hero;
+    for (var ci = 0; ci < this.chests.length; ci++) {
+      var c = this.chests[ci];
+      if (Math.abs(c.x - h.x) > 250 || Math.abs(c.y - h.y) > 440) G.edgeArrow(ctx, c.x - h.x + 270, c.y - h.y + 520, '#ffd27a', '宝箱');
+    }
+    if (this.boss && !this.boss.dead && (Math.abs(this.boss.x - h.x) > 260 || Math.abs(this.boss.y - h.y) > 450)) {
+      G.edgeArrow(ctx, this.boss.x - h.x + 270, this.boss.y - h.y + 520, '#ff5a3a', '烬王');
+    }
+    if (!this.save.tutSurv && this.state === 'play') {
+      if (this.t < 7) {
+        G.tip(ctx, '按住屏幕任意位置拖动来移动，攻击是自动的！', 270, 700, 440);
+        G.hand(ctx, 270 + Math.sin(this.t * 2.5) * 60, 640, 0.1);
+      } else if (this.level === 1) {
+        G.tip(ctx, '怪物死后掉绿色宝石，走过去捡起来就能升级！', 270, 700, 440, { border: '#7dff9a' });
+        var ng = null, nd = 1e9;
+        for (var gi = 0; gi < this.gems.length; gi++) {
+          var gg = this.gems[gi];
+          if (gg.kind !== 'xp') continue;
+          var gd = U.dist2(gg.x, gg.y, h.x, h.y);
+          if (gd < nd) { nd = gd; ng = gg; }
+        }
+        if (ng) {
+          var sx = ng.x - h.x + 270, sy = ng.y - h.y + 520;
+          if (sx > 20 && sx < 520 && sy > 90 && sy < 900) G.hand(ctx, sx, sy, this.t);
+          else G.edgeArrow(ctx, sx, sy, '#7dff9a', '宝石');
+        }
+      }
     }
   };
 
@@ -874,7 +932,7 @@
     ctx.fillRect(0, 0, 540, 960);
     G.rays(ctx, 270, 200, 300, '#ffd27a', this.levelT * 0.6, 14, 0.25);
     G.text(ctx, '升级！', 270, 170, { size: 50, weight: 'bold', align: 'center', color: '#ffd27a', stroke: '#4a1a00', strokeWidth: 7 });
-    G.text(ctx, '选择一项强化', 270, 222, { size: 18, align: 'center', color: '#ddd' });
+    G.text(ctx, this.save.tutSurv ? '选择一项强化' : '点一张卡片选择技能，同一技能越叠越强！', 270, 222, { size: 18, align: 'center', color: this.save.tutSurv ? '#ddd' : '#ffd27a' });
     for (var i = 0; i < this.levelChoices.length; i++) {
       var k = this.levelChoices[i], S = SKILLS[k];
       var lv = this.skills[k] || 0;
@@ -969,11 +1027,8 @@
       ctx.translate(x + 82, y + 62);
       var bob = sel ? Math.sin(this.t * 4) * 3 : 0;
       ctx.translate(0, bob);
-      G.glow(ctx, 0, 0, 50, C.color, sel ? 0.5 : 0.2);
-      ctx.fillStyle = C.color;
-      ctx.beginPath(); ctx.arc(0, 0, 30, 0, Math.PI * 2); ctx.fill();
-      ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
-      drawGlyph(ctx, C.glyph, 30, 'rgba(20,12,30,0.85)');
+      G.glow(ctx, 0, 0, 56, C.color, sel ? 0.5 : 0.2);
+      ER.Sprites.drawHero(ctx, 0, 34, { kind: C.kind, s: 1.35, face: 1, walk: this.t * (sel ? 3 : 1), atk: sel ? Math.max(0, Math.sin(this.t * 2.5)) * 0 : 0 });
       ctx.restore();
       G.text(ctx, C.name, x + 82, y + 118, { size: 19, weight: 'bold', align: 'center', color: sel ? C.color : '#fff' });
       G.paragraph(ctx, C.desc, x + 82, y + 148, 140, { size: 13, color: '#bbb', align: 'center' });
@@ -1007,8 +1062,8 @@
     }
     this.ui.button(ctx, 16, 790, 508, 100, '开始冒险', function () {
       self.app.goto(new Run(self.save));
-    }, { color: '#c8602a', size: 34, sub: CLASSES[s.cls].name + ' · 坚持 5 分钟击败烬王', pulse: true, id: 'start' });
-    G.text(ctx, '每局 5 分钟左右 · 死亡也能带走余烬', 270, 920, { size: 14, align: 'center', color: '#777' });
+    }, { color: '#c8602a', size: 34, sub: CLASSES[s.cls].name + ' · 坚持 3 分钟击败烬王', pulse: true, id: 'start' });
+    G.text(ctx, '每局 3 分钟左右 · 死亡也能带走余烬', 270, 920, { size: 14, align: 'center', color: '#777' });
     if (this.toast) {
       this.toastT = (this.toastT || 0) + 1 / 60;
       var a = Math.min(1, (2.5 - this.toastT) * 2);

@@ -11,11 +11,11 @@
   var BOSS_X = 270, BOSS_Y = 215, BOSS_R = 74;
 
   var MEMBERS = [
-    { id: 'tank', name: '铁砧', role: '坦克', color: '#5b8cff', glyph: 'shield', baseDps: 30, hp: 1700, range: 110, interval: 1.0, ox: 0, oy: -62 },
-    { id: 'rogue', name: '影七', role: '盗贼', color: '#ffd24a', glyph: 'dagger', baseDps: 64, hp: 1000, range: 110, interval: 0.45, ox: 46, oy: -44 },
-    { id: 'mage', name: '焰歌', role: '法师', color: '#ff6b4a', glyph: 'flame', baseDps: 74, hp: 850, range: 340, interval: 1.1, ox: -84, oy: 34, caster: true },
-    { id: 'hunter', name: '青羽', role: '猎手', color: '#4ae0ff', glyph: 'bow', baseDps: 60, hp: 950, range: 340, interval: 0.75, ox: 84, oy: 34, caster: true },
-    { id: 'heal', name: '晨露', role: '治疗', color: '#7dffb0', glyph: 'cross', baseDps: 12, hp: 900, range: 420, interval: 1.2, heal: 150, ox: 0, oy: 86, caster: true },
+    { id: 'tank', kind: 'warrior', name: '铁砧', role: '坦克', color: '#5b8cff', glyph: 'shield', baseDps: 30, hp: 1700, range: 110, interval: 1.0, ox: 0, oy: -62 },
+    { id: 'rogue', kind: 'rogue', name: '影七', role: '盗贼', color: '#ffd24a', glyph: 'dagger', baseDps: 64, hp: 1000, range: 110, interval: 0.45, ox: 46, oy: -44 },
+    { id: 'mage', kind: 'mage', name: '焰歌', role: '法师', color: '#ff6b4a', glyph: 'flame', baseDps: 74, hp: 850, range: 640, interval: 1.1, ox: -84, oy: 34, caster: true },
+    { id: 'hunter', kind: 'hunter', name: '青羽', role: '猎手', color: '#4ae0ff', glyph: 'bow', baseDps: 60, hp: 950, range: 640, interval: 0.75, ox: 84, oy: 34, caster: true },
+    { id: 'heal', kind: 'priest', name: '晨露', role: '治疗', color: '#7dffb0', glyph: 'cross', baseDps: 12, hp: 900, range: 700, interval: 1.2, heal: 150, ox: 0, oy: 86, caster: true },
   ];
   var MEMBER_BY_ID = {};
   MEMBERS.forEach(function (m) { MEMBER_BY_ID[m.id] = m; });
@@ -39,10 +39,10 @@
     var B = BOSSES[(tier - 1) % BOSSES.length];
     return {
       def: B, tier: tier,
-      maxHp: Math.round(14000 * Math.pow(1.3, tier - 1)),
+      maxHp: Math.round(8000 * Math.pow(1.28, tier - 1)),
       ds: Math.pow(1.17, tier - 1),
       ilvl: 8 + tier * 6,
-      recommend: Math.round(14 * 5 * Math.pow(1.3, tier - 1) * 0.9),
+      recommend: Math.round(14 * 5 * Math.pow(1.28, tier - 1) * 0.9),
     };
   }
 
@@ -127,39 +127,38 @@
 
   function drawMember(ctx, m, t, opt) {
     opt = opt || {};
-    var x = m.x, y = m.y;
+    var x = m.x, y = m.y + 14;
+    if (m.dead) { ER.Sprites.drawTomb(ctx, x, y, 1); return; }
+    // 脚下职业色光圈，方便一眼认出谁是谁
     ctx.save();
-    ctx.translate(x, y);
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.beginPath(); ctx.ellipse(0, 14, 15, 6, 0, 0, Math.PI * 2); ctx.fill();
-    if (m.dead) {
-      ctx.fillStyle = '#4a4652';
-      G.roundRect(ctx, -10, -14, 20, 26, 9); ctx.fill();
-      ctx.fillStyle = '#7a7684';
-      ctx.fillRect(-1.5, -9, 3, 12); ctx.fillRect(-5, -5, 10, 3);
-      ctx.restore();
-      return;
-    }
-    var bob = m.moving ? Math.sin(t * 18 + m.phase) * 2 : Math.sin(t * 3 + m.phase) * 1;
-    ctx.translate(0, bob);
-    if (opt.ult) G.glow(ctx, 0, 0, 34, '#ffb347', 0.5);
-    var grd = ctx.createRadialGradient(-4, -5, 2, 0, 0, 17);
-    grd.addColorStop(0, U.mix(m.def.color, '#ffffff', 0.45));
-    grd.addColorStop(1, m.def.color);
-    ctx.fillStyle = grd;
-    ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = U.rgba(m.def.color, 0.85);
     ctx.lineWidth = 2.5;
-    ctx.strokeStyle = m.hitFlash > 0 ? '#ff3030' : '#fff';
-    ctx.stroke();
-    drawGlyph(ctx, m.def.glyph, 16, 'rgba(20,12,30,0.85)');
+    ctx.beginPath(); ctx.ellipse(x, y, 17, 6, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+    ER.Sprites.drawHero(ctx, x, y, {
+      kind: m.def.kind, face: m.face || 1, walk: m.walk || 0, moving: m.moving, atk: m.atkAnim || 0,
+      hurt: m.hitFlash, s: 1.0, glow: opt.ult ? '#ffb347' : null,
+    });
     if (m.hp < m.maxHp) {
-      G.bar(ctx, -17, -27, 34, 6, m.hp / m.maxHp, m.hp / m.maxHp < 0.35 ? '#ff4a4a' : '#5ae05a', { border: false });
+      G.bar(ctx, x - 18, y - 64, 36, 6, m.hp / m.maxHp, m.hp / m.maxHp < 0.35 ? '#ff4a4a' : '#5ae05a', { border: false });
     }
+  }
+
+  /** 小头像：用于团队框体与大厅列表 */
+  function drawPortrait(ctx, d, x, y, size, dead) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2);
+    ctx.fillStyle = dead ? '#2a2630' : U.mix(d.color, '#000000', 0.55);
+    ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = dead ? '#555' : d.color; ctx.stroke();
+    ctx.clip();
+    if (dead) ER.Sprites.drawTomb(ctx, x, y + size * 0.7, size / 20);
+    else ER.Sprites.drawHero(ctx, x - size * 0.12, y + size * 1.75, { kind: d.kind, s: size / 19, face: 1, walk: 0 });
     ctx.restore();
   }
 
   // ------------------------------------------------------------------ 绘制：首领
-  function drawBoss(ctx, B, x, y, r, t, hurt, enraged) {
+  function drawBoss(ctx, B, x, y, r, t, hurt, enraged, slam) {
     ctx.save();
     ctx.translate(x, y);
     var br = 1 + Math.sin(t * 2.2) * 0.03;
@@ -240,6 +239,43 @@
     ctx.moveTo(-r * 0.2, -r * 0.85); ctx.lineTo(0, -r * 0.55); ctx.lineTo(r * 0.25, -r * 0.8);
     ctx.stroke();
     ctx.restore();
+    // 双臂与巨拳（巨像/督军）；slam 0~1 为砸地动作
+    if (B.shape !== 'spider') {
+      slam = slam || 0;
+      var sk = Math.sin(slam * Math.PI);
+      for (var side = -1; side <= 1; side += 2) {
+        var sx = side * r * 0.82, sy = -r * 0.05;
+        var fx = side * (r * 1.32 - sk * r * 0.25), fy = r * (0.5 + sk * 0.55) + Math.sin(t * 2 + side) * 4;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#140808';
+        ctx.lineWidth = r * 0.36;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(side * r * 1.45, r * 0.05, fx, fy); ctx.stroke();
+        ctx.strokeStyle = U.mix(B.c2, B.c1, 0.35);
+        ctx.lineWidth = r * 0.28;
+        ctx.stroke();
+        // 拳头
+        ctx.save();
+        ctx.translate(fx, fy);
+        ctx.rotate(side * 0.3);
+        ctx.fillStyle = U.mix(B.c2, B.c1, 0.25);
+        ctx.strokeStyle = '#140808';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        if (B.shape === 'golem') {
+          ctx.moveTo(-r * 0.24, -r * 0.18); ctx.lineTo(r * 0.12, -r * 0.26); ctx.lineTo(r * 0.28, 0);
+          ctx.lineTo(r * 0.16, r * 0.24); ctx.lineTo(-r * 0.2, r * 0.22); ctx.lineTo(-r * 0.3, 0);
+        } else {
+          ctx.moveTo(0, -r * 0.3); ctx.lineTo(r * 0.24, -r * 0.05); ctx.lineTo(r * 0.12, r * 0.26);
+          ctx.lineTo(-r * 0.14, r * 0.26); ctx.lineTo(-r * 0.24, -r * 0.05);
+        }
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = U.rgba(B.c1, 0.7);
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-r * 0.12, -r * 0.08); ctx.lineTo(r * 0.04, r * 0.06); ctx.lineTo(r * 0.14, -r * 0.1); ctx.stroke();
+        ctx.restore();
+      }
+    }
     // 眼睛
     var eyes = B.shape === 'spider'
       ? [[-0.3, -0.25, 0.1], [0.3, -0.25, 0.1], [-0.15, -0.42, 0.07], [0.15, -0.42, 0.07], [-0.45, -0.05, 0.06], [0.45, -0.05, 0.06]]
@@ -351,10 +387,13 @@
         def: d, x: 270 + d.ox, y: 420 + d.oy + 160, maxHp: maxHp, hp: maxHp, dead: false,
         mult: st.mult, crit: 0.12 + st.crit / 100, haste: st.haste / 100,
         atkT: U.rand(0, d.interval), dmg: 0, heal: 0, taken: 0, avoid: 0, moving: false, phase: i * 1.7,
-        hitFlash: 0, inside: {},
+        hitFlash: 0, inside: {}, walk: 0, atkAnim: 0, face: 1,
       };
     });
     this.say(U.pick(QUIPS.pull));
+    // 新手教学：第一次打第 1 层时开启
+    if (!save.tutRaid && tier === 1 && !this.farm) { this.tut = { step: 0, t: 0, dragged: 0, result: null }; this.hintT = 0; }
+    this.drops = [];
     self.ENRAGE = 180;
   }
 
@@ -379,6 +418,7 @@
     if (!this.dragging) return;
     var dx = (p.x - this.last.x) * 1.15, dy = (p.y - this.last.y) * 1.15;
     this.dragDist += Math.abs(dx) + Math.abs(dy);
+    if (this.tut) this.tut.dragged += Math.abs(dx) + Math.abs(dy);
     this.rally.x = U.clamp(this.rally.x + dx, 70, 470);
     this.rally.y = U.clamp(this.rally.y + dy, 330, 690);
     this.goal.x = this.rally.x; this.goal.y = this.rally.y;
@@ -386,6 +426,7 @@
     this.hintT = Math.min(this.hintT, 0.6);
   };
   RaidBattle.prototype.onUp = function (p) {
+    if (this.tut && this.tut.step === 0 && this.tut.t > 0.6) { this.tutNext(); this.dragging = false; return; }
     if (!this.dragging) return;
     this.dragging = false;
     // 轻点 = 把小队派到该位置
@@ -410,6 +451,7 @@
     this.stateT += dt;
     this.fx.update(d);
     this.bossHurt = Math.max(0, this.bossHurt - d);
+    this.bossSlam = Math.max(0, (this.bossSlam || 0) - d * 3);
     this.bossGhost = U.damp(this.bossGhost, this.bossHp / this.boss.maxHp, 3, d);
     this.hintT -= dt;
     for (var c = this.chat.length - 1; c >= 0; c--) { this.chat[c].t -= dt; if (this.chat[c].t <= 0) this.chat.splice(c, 1); }
@@ -419,6 +461,15 @@
 
     if (this.state === 'intro') {
       if (this.stateT > 1.6) { this.state = 'fight'; this.stateT = 0; }
+      return;
+    }
+    if (this.state === 'fight' && this.tut && this.tut.step < 5) {
+      this.ultCd = this.tut.step === 4 ? 0 : 99;
+      this.ultT = Math.max(0, this.ultT - d);
+      this.updateTutorial(dt);
+      this.updateHazards(d);
+      this.updateAttacks(d);
+      if (this.bossHp < this.boss.maxHp * 0.85) this.bossHp = this.boss.maxHp * 0.85;
       return;
     }
     if (this.state === 'fight') {
@@ -433,7 +484,8 @@
       if (Math.random() < d * 25) {
         this.fx.burst(BOSS_X + U.rand(-60, 60), BOSS_Y + U.rand(-60, 60), { n: 8, colors: [this.B.c1, '#fff', '#ffd27a'], speed: 300, life: 0.8 });
       }
-      if (this.stateT > 2.6 && !this.resultShown) {
+      this.updateDrops(d);
+      if (this.stateT > 3.4 && !this.resultShown) {
         this.resultShown = true;
         this.app.goto(new RaidResult(this));
       }
@@ -453,6 +505,7 @@
     for (var i = 0; i < this.party.length; i++) {
       var m = this.party[i];
       m.hitFlash = Math.max(0, m.hitFlash - d);
+      m.atkAnim = Math.max(0, (m.atkAnim || 0) - d * 3.5);
       if (m.dead) continue;
       var tx = U.clamp(this.rally.x + m.def.ox, 22, 518);
       var ty = U.clamp(this.rally.y + m.def.oy, ARENA_TOP + 20, ARENA_BOTTOM - 16);
@@ -464,6 +517,8 @@
         m.x += (dx / l) * mv; m.y += (dy / l) * mv;
       }
       m.moving = l > 6;
+      if (m.moving) m.walk += d * 14; else m.walk += d * 2;
+      if (Math.abs(m.x - BOSS_X) > 10) m.face = m.x < BOSS_X ? 1 : -1;
       // 不能穿过首领
       var bd = U.dist(m.x, m.y, BOSS_X, BOSS_Y);
       var minD = BOSS_R + 18;
@@ -511,6 +566,7 @@
     this.bossAtkT -= d;
     if (this.bossAtkT <= 0) {
       this.bossAtkT = 1.4;
+      this.bossSlam = 1;
       var alive = this.alive();
       if (alive.length) {
         var tank = this.party[0];
@@ -625,6 +681,7 @@
     var self = this;
     var alive = this.alive();
     var hit = alive.filter(function (m) { return self.inHazard(h, m); });
+    if (h.tut && this.tut) this.tut.result = h.type === 'soak' ? (hit.length >= alive.length ? 'ok' : 'hit') : (hit.length ? 'hit' : 'ok');
     var key = h.id;
     this.fx.shake(h.big ? 12 : 6, 0.3);
     if (h.type === 'soak') {
@@ -700,6 +757,7 @@
       m.atkT -= d * (1 + m.haste) * (ult ? 1.3 : 1);
       if (m.atkT > 0) continue;
       m.atkT = def.interval;
+      m.atkAnim = 1;
       var bd = U.dist(m.x, m.y, BOSS_X, BOSS_Y) - BOSS_R;
       if (def.id === 'heal') {
         // 治疗：优先治疗血量比例最低的队友
@@ -766,6 +824,7 @@
     if (this.ultCd > 0 || this.state !== 'fight') return;
     this.ultCd = 25;
     this.ultT = 8;
+    if (this.tut && this.tut.step === 4) this.tutNext();
     A.play('ult');
     this.fx.flash('#ff9a3a', 0.4, 1.5);
     this.fx.shake(8, 0.4);
@@ -774,6 +833,108 @@
     this.banner = { s: '焚心战旗！全队伤害 +60%', t: 1.6, c: '#ffb347' };
     this.say(U.pick(QUIPS.ult));
     P.vibrate(20);
+  };
+
+  // ---------------- 新手教学 ----------------
+  RaidBattle.prototype.tutNext = function () {
+    var tu = this.tut;
+    tu.step++;
+    tu.t = 0;
+    tu.result = null;
+    tu.spawned = false;
+    A.play('click');
+    if (tu.step === 5) {
+      this.save.tutRaid = true;
+      writeSave(this.save);
+      this.mechT = 3;
+      this.ultCd = 0;
+      this.banner = { s: '开打！击败首领就能开箱拿装备', t: 2.4, c: '#ffd27a' };
+    }
+  };
+
+  RaidBattle.prototype.updateTutorial = function (dt) {
+    var tu = this.tut;
+    tu.t += dt;
+    var alive = this.alive();
+    var cen = { x: this.rally.x, y: this.rally.y };
+    if (tu.step === 1 && tu.dragged > 160 && tu.t > 0.8) this.tutNext();
+    else if (tu.step === 2) {
+      if (!tu.spawned && tu.t > 0.4) {
+        tu.spawned = true;
+        this.hazards.push({ type: 'circle', x: cen.x, y: cen.y + 10, r: 95, t: 0, dur: 3.2, dmg: 120, color: this.B.burn, tut: true });
+        this.cast = { name: this.B.mechs.pools.name, t: 0, dur: 3.2 };
+        A.play('warn');
+      }
+      if (tu.result && !tu.doneT) tu.doneT = tu.t;
+      if (tu.doneT && tu.t - tu.doneT > 1.6) { tu.doneT = 0; this.tutNext(); }
+    } else if (tu.step === 3) {
+      if (!tu.spawned && tu.t > 0.4) {
+        tu.spawned = true;
+        var sx = cen.x > 270 ? cen.x - 150 : cen.x + 150;
+        this.hazards.push({ type: 'soak', x: sx, y: U.clamp(cen.y + 40, 430, 640), r: 85, t: 0, dur: 4.2, dmg: 60, color: '#ffd84a', big: true, tut: true });
+        this.cast = { name: this.B.mechs.soak.name, t: 0, dur: 4.2 };
+        A.play('warn');
+      }
+      if (tu.result && !tu.doneT) tu.doneT = tu.t;
+      if (tu.doneT && tu.t - tu.doneT > 1.6) { tu.doneT = 0; this.tutNext(); }
+    }
+    if (this.cast) { this.cast.t += dt; if (this.cast.t >= this.cast.dur) this.cast = null; }
+    void alive;
+  };
+
+  RaidBattle.prototype.renderTutorial = function (ctx) {
+    var tu = this.tut;
+    if (!tu || tu.step >= 5 || this.state !== 'fight') return;
+    var t = this.t;
+    var cx = this.rally.x, cy = this.rally.y;
+    var a = Math.min(1, tu.t * 4);
+    ctx.save();
+    ctx.globalAlpha = a;
+    G.text(ctx, '新手教学 ' + (tu.step + 1) + '/5', 270, 104, { size: 15, weight: 'bold', align: 'center', color: '#ffd27a', stroke: '#000', strokeWidth: 4 });
+    if (tu.step === 0) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, ARENA_TOP, 540, ARENA_BOTTOM - ARENA_TOP);
+      G.glow(ctx, cx, cy, 120, '#ffd27a', 0.25);
+      G.tip(ctx, '这是你的 5 人小队：坦克扛怪、治疗加血、3 个输出打首领。他们会自动战斗！', 270, 560, 460, { sub: '点击屏幕继续' });
+      G.hand(ctx, cx + 20, cy - 10, t);
+    } else if (tu.step === 1) {
+      G.tip(ctx, '你只需要做一件事：按住屏幕拖动，整个小队会跟着你走', 270, 676, 460);
+      var hx = 270 + Math.sin(t * 2.2) * 110;
+      ctx.strokeStyle = 'rgba(255,230,160,0.35)'; ctx.lineWidth = 3; ctx.setLineDash([6, 8]);
+      ctx.beginPath(); ctx.moveTo(160, 600); ctx.lineTo(380, 600); ctx.stroke(); ctx.setLineDash([]);
+      G.hand(ctx, hx, 588, 0.1);
+      G.bar(ctx, 170, 650, 200, 10, Math.min(1, tu.dragged / 160), '#ffb347', { border: false });
+    } else if (tu.step === 2) {
+      if (tu.result === 'ok') G.tip(ctx, '漂亮！躲开红圈就不会掉血', 270, 676, 380, { border: '#4ad04a' });
+      else if (tu.result === 'hit') G.tip(ctx, '被烫到了！下次看到红圈早点拖走', 270, 676, 400, { border: '#ff5a5a' });
+      else G.tip(ctx, '红圈马上要爆炸！拖动小队，全部离开红圈！', 270, 676, 440, { border: '#ff5a5a' });
+      if (!tu.result) G.hand(ctx, cx + (cx > 270 ? -130 : 130), cy + 20, t);
+    } else if (tu.step === 3) {
+      var h = this.hazards[0];
+      if (tu.result === 'ok') G.tip(ctx, '完美分摊！黄圈 = 大家站一起', 270, 676, 400, { border: '#4ad04a' });
+      else if (tu.result === 'hit') G.tip(ctx, '有人没站进去，全团都受伤了！', 270, 676, 400, { border: '#ff5a5a' });
+      else G.tip(ctx, '黄圈正好相反：把全员拖进黄圈，一起分摊伤害！', 270, 676, 460, { border: '#ffd84a' });
+      if (!tu.result && h) G.hand(ctx, h.x, h.y, t);
+    } else if (tu.step === 4) {
+      G.tip(ctx, '大招充能好了！点右下角按钮，全队伤害暴增 8 秒', 270, 676, 440);
+      G.hand(ctx, 462, 862, t);
+    }
+    ctx.restore();
+  };
+
+  RaidBattle.prototype.updateDrops = function (d) {
+    for (var i = 0; i < this.drops.length; i++) {
+      var c = this.drops[i];
+      c.t += d;
+      if (c.landed) continue;
+      c.vy += 1400 * d;
+      c.x += c.vx * d; c.y += c.vy * d;
+      if (c.y >= c.gy) {
+        c.y = c.gy;
+        if (Math.abs(c.vy) > 220) { c.vy *= -0.4; c.vx *= 0.6; A.play('shake', 0.05); }
+        else { c.landed = true; this.fx.burst(c.x, c.y, { n: 26, colors: ['#ffd27a', '#fff'], speed: 260, life: 0.6, shape: 'spark' }); A.play('loot1'); }
+      }
+    }
   };
 
   RaidBattle.prototype.checkEnd = function () {
@@ -791,6 +952,7 @@
       this.fx.ring(BOSS_X, BOSS_Y, 20, 600, this.B.c1, 1.2, 16);
       this.slowmo(0.2, 1.2);
       P.vibrate(80);
+      this.drops = [{ x: BOSS_X, y: BOSS_Y, vx: U.rand(-80, 80), vy: -520, gy: 520, t: 0 }];
       return;
     }
     if (!this.alive().length) {
@@ -863,7 +1025,7 @@
     }
     // 首领
     if (this.state !== 'victory' || this.stateT < 0.25) {
-      drawBoss(ctx, B, BOSS_X, BOSS_Y, BOSS_R, this.t, this.bossHurt, this.enraged || this.phase2);
+      drawBoss(ctx, B, BOSS_X, BOSS_Y, BOSS_R, this.t, this.bossHurt, this.enraged || this.phase2, this.bossSlam);
     }
     // 小队
     var ult = this.ultT > 0;
@@ -905,7 +1067,28 @@
     if (ult) G.vignette(ctx, '#ff7a1a', 0.35 + Math.sin(this.t * 8) * 0.05);
     if (this.party.some(function (m) { return !m.dead && m.hp / m.maxHp < 0.3; })) G.vignette(ctx, '#ff0000', 0.18);
 
+    // 掉落的宝箱
+    for (var dI = 0; dI < this.drops.length; dI++) {
+      var dc = this.drops[dI];
+      if (dc.landed) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        var pg = ctx.createLinearGradient(0, dc.y - 380, 0, dc.y);
+        pg.addColorStop(0, 'rgba(255,210,122,0)');
+        pg.addColorStop(1, 'rgba(255,210,122,0.55)');
+        ctx.fillStyle = pg;
+        ctx.fillRect(dc.x - 45, dc.y - 380, 90, 380);
+        ctx.restore();
+        G.rays(ctx, dc.x, dc.y - 20, 150, '#ffd27a', this.t, 12, 0.35);
+      }
+      ER.drawChest(ctx, dc.x, dc.y, 0.55, 0, '#ffd27a', 0.6);
+      if (dc.landed) G.text(ctx, '宝箱掉落！', dc.x, dc.y + 50, { size: 24, weight: 'bold', align: 'center', color: '#ffd27a', stroke: '#000', strokeWidth: 5 });
+    }
+    if (this.state === 'fight' && !this.tut || (this.tut && this.tut.step >= 5 && this.state === 'fight')) {
+      G.text(ctx, '目标：击败首领  ·  躲开红色  ·  黄圈集合', 270, ARENA_BOTTOM - 12, { size: 14, align: 'center', color: 'rgba(255,220,170,0.75)' });
+    }
     this.renderHud(ctx);
+    this.renderTutorial(ctx);
     this.fx.renderFlash(ctx);
 
     if (this.state === 'intro') {
@@ -1044,12 +1227,7 @@
       var m = this.party[i];
       var fx = 12 + i * 76, fy = by + 92;
       G.panel(ctx, fx, fy, 72, 96, { radius: 10, border: m.dead ? '#555' : U.rgba(m.def.color, 0.6), lineWidth: 2 });
-      ctx.save();
-      ctx.translate(fx + 36, fy + 26);
-      ctx.fillStyle = m.dead ? '#444' : m.def.color;
-      ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
-      drawGlyph(ctx, m.def.glyph, 15, 'rgba(20,12,30,0.85)');
-      ctx.restore();
+      drawPortrait(ctx, m.def, fx + 36, fy + 26, 20, m.dead);
       G.text(ctx, m.def.name, fx + 36, fy + 54, { size: 15, weight: 'bold', align: 'center', color: m.dead ? '#777' : '#fff' });
       G.bar(ctx, fx + 6, fy + 70, 60, 10, m.hp / m.maxHp, m.hp / m.maxHp < 0.35 ? '#ff4a4a' : '#4ad04a', { border: false });
       var tag = m.dead ? '阵亡' : m.outOfRange ? '够不着' : (m.def.caster && m.moving ? '移动中' : '');
@@ -1340,12 +1518,7 @@
       var st = memberStats(save, d.id);
       var y = 362 + i * 70;
       G.panel(ctx, 16, y, 508, 62, { radius: 10, border: U.rgba(d.color, 0.4), lineWidth: 1.5 });
-      ctx.save();
-      ctx.translate(48, y + 31);
-      ctx.fillStyle = d.color;
-      ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.fill();
-      drawGlyph(ctx, d.glyph, 18, 'rgba(20,12,30,0.85)');
-      ctx.restore();
+      drawPortrait(ctx, d, 46, y + 31, 24, false);
       G.text(ctx, d.name, 76, y + 22, { size: 18, weight: 'bold', color: '#fff' });
       G.text(ctx, d.role + ' · 战力 ' + st.power, 76, y + 44, { size: 13, color: '#bbb' });
       ['weapon', 'chest'].forEach(function (slot, si) {

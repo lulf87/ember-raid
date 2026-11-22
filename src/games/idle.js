@@ -8,7 +8,7 @@
   var SAVE_KEY = 'er_idle_v1';
   var SLOT_ORDER = ['weapon', 'helm', 'chest', 'hands', 'ring', 'trinket'];
   var LANE_TOP = 80, GROUND = 372, LANE_BOTTOM = 430;
-  var KILLS_PER_ZONE = 10;
+  var KILLS_PER_ZONE = 8;
   var BOSS_TIME = 30;
   var OFFLINE_CAP = 8 * 3600;
 
@@ -31,6 +31,7 @@
   function loadSave() {
     var s = P.storage.get(SAVE_KEY, null);
     if (!s || !s.gear) s = defaultSave();
+    if (s.tut == null) s.tut = 0;
     return s;
   }
 
@@ -41,105 +42,31 @@
   }
   function dpsOf(save) { return (10 + save.lvl * 5) * (1 + gearPower(save) / 40); }
   function powerOf(save) { return Math.round(dpsOf(save) * 10); }
-  function mobHp(zone, boss) { return Math.round(40 * Math.pow(1.22, zone - 1) * (boss ? 9 : 1)); }
+  function mobHp(zone, boss) { return Math.round(24 * Math.pow(1.22, zone - 1) * (boss ? 6 : 1)); }
   function goldPer(zone) { return Math.round(4 * Math.pow(1.18, zone - 1)); }
   function upCost(lvl) { return Math.round(15 * Math.pow(1.21, lvl - 1)); }
   function ilvlFor(zone) { return 4 + zone * 3; }
 
   // ------------------------------------------------------------------ 绘制
-  function drawHero(ctx, x, y, kind, t, atk) {
-    ctx.save();
-    ctx.translate(x, y);
-    var bob = Math.sin(t * 10 + x) * 2;
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.beginPath(); ctx.ellipse(0, 2, 16, 5, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.translate(0, bob);
-    var col = kind === 0 ? '#5b8cff' : kind === 1 ? '#ff6b4a' : '#7dffb0';
-    // 腿
-    ctx.strokeStyle = '#1a1420';
-    ctx.lineWidth = 5;
-    ctx.lineCap = 'round';
-    var step = Math.sin(t * 10 + x) * 6;
-    ctx.beginPath(); ctx.moveTo(-4, -14); ctx.lineTo(-4 + step, 0); ctx.moveTo(4, -14); ctx.lineTo(4 - step, 0); ctx.stroke();
-    // 身体
-    ctx.fillStyle = col;
-    G.roundRect(ctx, -11, -40, 22, 28, 6); ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = '#1a1420'; ctx.stroke();
-    // 头
-    ctx.fillStyle = '#f0d2b0';
-    ctx.beginPath(); ctx.arc(0, -50, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    if (kind === 1) { // 法师帽
-      ctx.fillStyle = '#7a2a8a';
-      ctx.beginPath(); ctx.moveTo(-13, -54); ctx.lineTo(4, -78); ctx.lineTo(13, -54); ctx.closePath(); ctx.fill(); ctx.stroke();
-    } else if (kind === 0) { // 头盔
-      ctx.fillStyle = '#9aa4b8';
-      ctx.beginPath(); ctx.arc(0, -52, 11, Math.PI, 0); ctx.fill(); ctx.stroke();
-    } else { // 兜帽光环
-      ctx.strokeStyle = 'rgba(255,240,170,0.9)';
-      ctx.beginPath(); ctx.ellipse(0, -64, 9, 3, 0, 0, Math.PI * 2); ctx.stroke();
-    }
-    // 武器
-    var swing = atk > 0 ? Math.sin((1 - atk) * Math.PI) * 1.6 : 0;
-    ctx.save();
-    ctx.translate(10, -30);
-    ctx.rotate(-0.6 + swing);
-    if (kind === 0) {
-      ctx.fillStyle = '#e8e2d6';
-      ctx.fillRect(-2, -30, 5, 30);
-      ctx.fillStyle = '#c9a24a';
-      ctx.fillRect(-6, -2, 13, 4);
-    } else {
-      ctx.fillStyle = '#7a4a22';
-      ctx.fillRect(-2, -34, 4, 40);
-      G.glow(ctx, 0, -36, 12, kind === 1 ? '#ff8a3a' : '#bfffcf', 0.9);
-    }
-    ctx.restore();
-    ctx.restore();
+  var HERO_KINDS = ['warrior', 'mage', 'priest'];
+  var MOB_TYPES = ['imp', 'ghoul', 'bat'];
+  function drawHero(ctx, x, y, kind, t, atk, walking) {
+    ER.Sprites.drawHero(ctx, x, y, { kind: HERO_KINDS[kind], s: 1.25, face: 1, walk: t * (walking ? 10 : 2) + x, moving: walking, atk: atk });
   }
-
   function drawMob(ctx, x, y, col, s, t, boss, hurt, seed) {
+    var type = boss ? 'brute' : MOB_TYPES[seed % MOB_TYPES.length];
+    var size = boss ? 120 : (type === 'bat' ? 50 : 62);
+    var lift = type === 'bat' ? 10 : 0;
+    if (boss) G.glow(ctx, x, y - 60, 110, col, 0.45);
     ctx.save();
-    ctx.translate(x, y);
+    ctx.translate(x, y - lift);
     ctx.scale(s, s);
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.beginPath(); ctx.ellipse(0, 2, 26, 7, 0, 0, Math.PI * 2); ctx.fill();
-    var sq = 1 + Math.sin(t * 8 + seed) * 0.06;
-    ctx.scale(1 / sq, sq);
-    if (boss) G.glow(ctx, 0, -30, 70, col, 0.4);
-    var g = ctx.createRadialGradient(-8, -34, 4, 0, -24, 32);
-    g.addColorStop(0, U.mix(col, '#ffffff', 0.35));
-    g.addColorStop(1, U.mix(col, '#000000', 0.45));
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.moveTo(-26, 0);
-    ctx.quadraticCurveTo(-30, -44, 0, -48);
-    ctx.quadraticCurveTo(30, -44, 26, 0);
-    ctx.closePath();
-    ctx.fill();
-    ctx.lineWidth = 2.5; ctx.strokeStyle = '#140c18'; ctx.stroke();
-    // 角
-    if (seed % 3 !== 0 || boss) {
-      ctx.fillStyle = '#e8dcc0';
-      ctx.beginPath(); ctx.moveTo(-16, -40); ctx.lineTo(-24, -62); ctx.lineTo(-8, -44); ctx.closePath(); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(16, -40); ctx.lineTo(24, -62); ctx.lineTo(8, -44); ctx.closePath(); ctx.fill(); ctx.stroke();
-    }
-    // 眼睛（朝左看向小队）
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(-10, -28, 6, 0, Math.PI * 2); ctx.arc(6, -28, 6, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = boss ? '#ff2a2a' : '#140c18';
-    ctx.beginPath(); ctx.arc(-12, -28, 3, 0, Math.PI * 2); ctx.arc(4, -28, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#140c18';
-    ctx.beginPath(); ctx.moveTo(-12, -14); ctx.quadraticCurveTo(-2, -10, 8, -14); ctx.stroke();
+    ER.Sprites.blitMonster(ctx, type, 0, 0, size, t * 1.2 + seed * 0.13, -1, col, hurt > 0);
     if (boss) {
-      ctx.fillStyle = '#ffd24a';
+      ctx.fillStyle = '#ffd24a'; ctx.strokeStyle = '#1b1222'; ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.moveTo(-14, -48); ctx.lineTo(-10, -62); ctx.lineTo(-4, -52); ctx.lineTo(0, -66); ctx.lineTo(4, -52); ctx.lineTo(10, -62); ctx.lineTo(14, -48);
+      ctx.moveTo(-22, -112); ctx.lineTo(-18, -130); ctx.lineTo(-9, -118); ctx.lineTo(-2, -134); ctx.lineTo(5, -118); ctx.lineTo(14, -130); ctx.lineTo(16, -112);
       ctx.closePath(); ctx.fill(); ctx.stroke();
-    }
-    if (hurt > 0) {
-      ctx.globalAlpha = Math.min(0.7, hurt * 8);
-      ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.moveTo(-26, 0); ctx.quadraticCurveTo(-30, -44, 0, -48); ctx.quadraticCurveTo(30, -44, 26, 0); ctx.closePath(); ctx.fill();
     }
     ctx.restore();
   }
@@ -165,6 +92,9 @@
     this.toast = null;
     this.bossT = 0;
     this.offline = this.computeOffline();
+    this.flyers = [];
+    this.slotFlash = {};
+    this.chestBump = 0;
     this.spawnMob();
   }
 
@@ -279,7 +209,54 @@
     this.goldShown = U.damp(this.goldShown, s.gold, 6, dt);
     this.powerShown = U.damp(this.powerShown, powerOf(s), 5, dt);
     this.updateOpening(dt);
+    this.updateFlyers(dt);
     if (this.toast) { this.toast.t -= dt; if (this.toast.t <= 0) this.toast = null; }
+  };
+
+  var OPEN_BTN = { x: 166, y: LANE_BOTTOM + 346 };
+  IdleScene.prototype.slotPos = function (slot) {
+    var i = SLOT_ORDER.indexOf(slot);
+    return { x: 16 + (i % 3) * 172 + 38, y: LANE_BOTTOM + 96 + Math.floor(i / 3) * 98 + 44 };
+  };
+  IdleScene.prototype.updateFlyers = function (dt) {
+    this.chestBump = Math.max(0, this.chestBump - dt * 4);
+    for (var k in this.slotFlash) { this.slotFlash[k] -= dt; if (this.slotFlash[k] <= 0) delete this.slotFlash[k]; }
+    for (var i = this.flyers.length - 1; i >= 0; i--) {
+      var f = this.flyers[i];
+      f.t += dt;
+      if (f.t < 0) continue;
+      if (f.kind === 'chest') {
+        // 先在地上弹一下（亮光柱），再飞向开箱按钮
+        if (f.t < 0.6) {
+          f.x = f.sx; f.y = f.sy - Math.sin((f.t / 0.6) * Math.PI) * 50;
+        } else {
+          var k2 = U.easeInCubic(Math.min(1, (f.t - 0.6) / (f.dur - 0.6)));
+          f.x = U.lerp(f.sx, OPEN_BTN.x, k2);
+          f.y = U.lerp(f.sy, OPEN_BTN.y, k2) - Math.sin(k2 * Math.PI) * 120;
+          if (Math.random() < 0.6) this.fx.burst(f.x, f.y, { n: 1, color: '#ffd24a', speed: 40, life: 0.4, size: 4 });
+        }
+        if (f.t >= f.dur) {
+          this.flyers.splice(i, 1);
+          this.save.chests++;
+          this.chestBump = 1;
+          this.fx.text(OPEN_BTN.x + 90, OPEN_BTN.y - 40, '+1', { color: '#ffd24a', size: 30, crit: true });
+          this.fx.burst(OPEN_BTN.x, OPEN_BTN.y, { n: 16, colors: ['#ffd24a', '#fff'], speed: 220, life: 0.5 });
+          A.play('coin');
+          this.persist();
+        }
+      } else if (f.kind === 'item') {
+        var k3 = U.easeOutCubic(Math.min(1, f.t / f.dur));
+        f.x = U.lerp(f.sx, f.tx, k3);
+        f.y = U.lerp(f.sy, f.ty, k3) - Math.sin(k3 * Math.PI) * 60;
+        if (f.t >= f.dur) {
+          this.flyers.splice(i, 1);
+          this.slotFlash[f.item.slot] = 0.8;
+          var R = Loot.RARITY[f.item.rarity];
+          this.fx.burst(f.tx, f.ty, { n: 20, colors: [R.color, '#fff'], speed: 200, life: 0.5, shape: 'spark' });
+          if (f.gain > 0) this.fx.text(f.tx + 40, f.ty - 30, '战力+' + U.fmt(f.gain), { color: '#7dff9a', size: 20, crit: true, life: 1.2 });
+        }
+      }
+    }
   };
 
   IdleScene.prototype.killMob = function () {
@@ -293,9 +270,11 @@
     A.play(m.boss ? 'boom' : 'hit');
     var chest = m.boss ? 2 : (Math.random() < 0.22 ? 1 : 0);
     if (chest) {
-      s.chests += chest;
-      this.fx.text(m.x, GROUND - 100, '宝箱 +' + chest, { color: '#ffd24a', size: 22, life: 1.2 });
-      A.play('loot0');
+      for (var ci = 0; ci < chest; ci++) {
+        this.flyers.push({ kind: 'chest', x: m.x + ci * 20, y: GROUND - 40, sx: m.x + ci * 20, sy: GROUND - 40, t: -ci * 0.25, dur: 1.5 });
+      }
+      this.fx.text(m.x, GROUND - 110, '掉落宝箱！', { color: '#ffd24a', size: 26, crit: true, life: 1.3 });
+      A.play('loot1');
     }
     if (m.boss) {
       s.zone++;
@@ -361,7 +340,13 @@
     A.play('loot' + item.rarity);
     var R = Loot.RARITY[item.rarity];
     this.fx.burst(270, 250, { n: 14 + item.rarity * 16, colors: [R.color, '#fff'], speed: 260 + item.rarity * 80, life: 0.7, shape: 'spark' });
-    if (better && gain > 0) this.fx.text(270, 470, '战力 +' + U.fmt(gain), { color: '#7dff9a', size: 28, crit: true, life: 1.2 });
+    if (better) {
+      var sp = this.slotPos(item.slot);
+      this.flyers.push({ kind: 'item', item: item, sx: 270, sy: 250, x: 270, y: 250, tx: sp.x, ty: sp.y, t: -0.15, dur: 0.6, gain: gain });
+    } else {
+      this.fx.text(270, 330, '不如当前，卖出 +' + U.fmt(sell) + ' 金币', { color: '#ffe14a', size: 18, life: 1.1 });
+    }
+    if (this.save.tut === 0) { this.save.tut = 1; this.tutT = 0; }
     if (item.rarity >= 3) {
       this.fx.flash(R.color, 0.3, 2);
       this.fx.shake(6, 0.3);
@@ -409,7 +394,7 @@
     ctx.fillStyle = U.mix(Z.ground, '#000000', 0.3);
     for (var gx = -((this.scroll) % 60); gx < 540; gx += 60) ctx.fillRect(gx, GROUND + 14, 30, 4);
     // 小队
-    for (var i = 0; i < 3; i++) drawHero(ctx, 190 - i * 50, GROUND, i, this.mob.x > 300 ? this.t : this.t * 0.3, this.atkAnim[i]);
+    for (var i = 0; i < 3; i++) drawHero(ctx, 196 - i * 56, GROUND, i, this.t, this.atkAnim[i], this.mob.x > 300 && this.mob.dying <= 0);
     // 怪物
     var m = this.mob;
     var Zm = Z.mob;
@@ -419,7 +404,7 @@
     }
     if (m.dying <= 0) {
       var bw = m.boss ? 140 : 80;
-      G.bar(ctx, m.x - bw / 2, GROUND - (m.boss ? 130 : 84), bw, 10, m.hp / m.max, '#d8362a', { border: false });
+      G.bar(ctx, m.x - bw / 2, GROUND - (m.boss ? 150 : 84), bw, 10, m.hp / m.max, '#d8362a', { border: false });
     }
     // 金币
     for (var c = 0; c < this.coins.length; c++) {
@@ -458,6 +443,8 @@
     }
 
     this.renderPanel(ctx);
+    this.renderFlyers(ctx);
+    this.renderTutorial(ctx);
     if (this.offline) this.renderOffline(ctx);
     this.fx.renderFlash(ctx);
   };
@@ -497,6 +484,45 @@
     ctx.restore();
   };
 
+  IdleScene.prototype.renderFlyers = function (ctx) {
+    for (var i = 0; i < this.flyers.length; i++) {
+      var f = this.flyers[i];
+      if (f.t < 0) continue;
+      if (f.kind === 'chest') {
+        if (f.t < 0.6) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          var pg = ctx.createLinearGradient(0, f.sy - 220, 0, f.sy);
+          pg.addColorStop(0, 'rgba(255,210,74,0)');
+          pg.addColorStop(1, 'rgba(255,210,74,0.6)');
+          ctx.fillStyle = pg;
+          ctx.fillRect(f.sx - 26, f.sy - 220, 52, 220);
+          ctx.restore();
+        }
+        ER.drawChest(ctx, f.x, f.y, 0.34, 0, '#ffd24a', 0.7);
+      } else {
+        Loot.drawIcon(ctx, f.item.slot, f.x, f.y, 52, f.item.rarity);
+      }
+    }
+  };
+
+  IdleScene.prototype.renderTutorial = function (ctx) {
+    var s = this.save;
+    if (this.offline || this.rolling) return;
+    if (s.tut === 0) {
+      if (s.chests <= 0 && !this.flyers.length) return;
+      G.tip(ctx, '小队在自动打怪，怪物会掉宝箱。点「开箱」看看能开出什么！', 270, LANE_BOTTOM + 200, 440);
+      G.hand(ctx, 200, LANE_BOTTOM + 350, this.t);
+    } else if (s.tut === 1) {
+      this.tutT = (this.tutT || 0) + 1 / 60;
+      if (this.tutT > 6.5) { s.tut = 2; this.persist(); return; }
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (6.5 - this.tutT) * 2, this.tutT * 3);
+      G.tip(ctx, '更好的装备会自动穿上，战力就涨了！金币可以点「训练」变强，打满 ' + KILLS_PER_ZONE + ' 只怪后挑战区域首领。', 270, 96, 470, { size: 17 });
+      ctx.restore();
+    }
+  };
+
   IdleScene.prototype.renderPanel = function (ctx) {
     var self = this, s = this.save;
     var top = LANE_BOTTOM;
@@ -523,6 +549,7 @@
       var item = s.gear[slot];
       G.panel(ctx, x, y, 164, 88, { radius: 10, border: item ? U.rgba(Loot.RARITY[item.rarity].color, 0.7) : 'rgba(255,255,255,0.12)', lineWidth: 2 });
       if (item) {
+        if (this.slotFlash[slot]) G.glow(ctx, x + 82, y + 44, 110, Loot.RARITY[item.rarity].color, this.slotFlash[slot] * 0.8);
         Loot.drawIcon(ctx, slot, x + 38, y + 44, 56, item.rarity);
         var nm = G.wrap(ctx, item.name, 92, 14, 'bold');
         G.text(ctx, nm[0], x + 72, y + 26, { size: 14, weight: 'bold', color: Loot.RARITY[item.rarity].color });
@@ -536,6 +563,7 @@
     // 开箱
     var by = top + 300;
     var busy = this.openQueue > 0 || !!this.rolling;
+    if (this.chestBump > 0 || s.chests > 0) G.glow(ctx, 166, by + 46, 170, '#ffb347', 0.25 + this.chestBump * 0.5);
     this.ui.button(ctx, 16, by, 300, 92, '开箱', function () { self.openChests(1); }, {
       color: '#c8602a', size: 32, sub: '库存 ' + s.chests + ' 个' + (s.chests >= 10 ? ' · 长期攒着更爽' : ''), disabled: s.chests <= 0, pulse: s.chests > 0 && !busy, id: 'open1',
     });

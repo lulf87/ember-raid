@@ -173,6 +173,79 @@
     ctx.fillRect(0, 0, 540, 960);
   };
 
+  /** 新手引导：会点击动画的手指（指尖位于 x,y） */
+  G.hand = function (ctx, x, y, t) {
+    var k = (t * 1.6) % 1;
+    var press = k < 0.25 ? k / 0.25 : k < 0.45 ? 1 - (k - 0.25) / 0.2 : 0;
+    ctx.save();
+    // 点击波纹
+    if (k > 0.2 && k < 0.8) {
+      var rk = (k - 0.2) / 0.6;
+      ctx.strokeStyle = 'rgba(255,230,160,' + (1 - rk) + ')';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(x, y, 8 + rk * 26, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.translate(x + 6 - press * 4, y + 8 - press * 4);
+    ctx.rotate(-0.45);
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#1b1222';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(-5, 0); ctx.lineTo(-5, 22); ctx.lineTo(-12, 18); ctx.lineTo(-15, 22); ctx.lineTo(-6, 38);
+    ctx.lineTo(14, 38); ctx.lineTo(18, 24); ctx.lineTo(18, 16); ctx.lineTo(13, 14); ctx.lineTo(13, 18);
+    ctx.lineTo(13, 13); ctx.lineTo(8, 11); ctx.lineTo(8, 17); ctx.lineTo(8, 11); ctx.lineTo(3, 10); ctx.lineTo(3, 0);
+    ctx.quadraticCurveTo(-1, -5, -5, 0);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  };
+
+  /** 新手引导：提示气泡（居中于 x），返回高度 */
+  G.tip = function (ctx, str, x, y, w, opt) {
+    opt = opt || {};
+    w = w || 400;
+    var size = opt.size || 19;
+    var lines = G.wrap(ctx, str, w - 36, size, 'bold');
+    var h = lines.length * size * 1.4 + 26;
+    var bx = U.clamp(x - w / 2, 10, 530 - w);
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 12;
+    G.roundRect(ctx, bx, y, w, h, 14);
+    ctx.fillStyle = opt.bg || 'rgba(255,246,228,0.97)';
+    ctx.fill();
+    ctx.restore();
+    G.roundRect(ctx, bx, y, w, h, 14);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = opt.border || '#ff9a3a';
+    ctx.stroke();
+    for (var i = 0; i < lines.length; i++) {
+      G.text(ctx, lines[i], bx + w / 2, y + 13 + size * 0.7 + i * size * 1.4, { size: size, weight: 'bold', align: 'center', color: opt.color || '#3a1a08', shadow: false });
+    }
+    if (opt.sub) G.text(ctx, opt.sub, bx + w - 14, y + h - 10, { size: 12, align: 'right', color: '#a07050', shadow: false });
+    return h;
+  };
+
+  /** 屏幕边缘方向箭头（指向屏幕外目标） */
+  G.edgeArrow = function (ctx, tx, ty, color, label) {
+    var cx = 270, cy = 480;
+    var a = Math.atan2(ty - cy, tx - cx);
+    var mx = 240, my = 410;
+    var k = Math.min(mx / Math.abs(Math.cos(a) || 1e-6), my / Math.abs(Math.sin(a) || 1e-6));
+    var x = cx + Math.cos(a) * k, y = cy + Math.sin(a) * k;
+    ctx.save();
+    ctx.translate(x, y);
+    G.glow(ctx, 0, 0, 34, color, 0.6);
+    ctx.rotate(a);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#1b1222';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-10, -13); ctx.lineTo(-4, 0); ctx.lineTo(-10, 13); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+    if (label) G.text(ctx, label, U.clamp(x, 50, 490), y + (y > 480 ? -26 : 28), { size: 14, weight: 'bold', align: 'center', color: color, stroke: '#000', strokeWidth: 3 });
+  };
+
   // ------------------------------------------------------------------
   function UI() {
     this.items = [];
