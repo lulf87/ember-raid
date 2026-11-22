@@ -6,8 +6,8 @@
   var ER = window.ER, U = ER.U, G = ER.G, A = ER.audio, P = ER.platform;
 
   var CARDS = [
-    { key: 'raid', tag: 'A', title: '余烬团本', sub: '单指带团 · 躲技能 · 开箱分装备', color: '#ff8a3a', rec: true },
-    { key: 'idle', tag: 'B', title: '酒馆挂机录', sub: '放置刷宝 · 开箱配装 · 离线收益', color: '#ffd24a' },
+    { key: 'raid', tag: 'A', title: '余烬团本', sub: '单指带团 · 躲技能 · 开箱分装备', color: '#ff8a3a' },
+    { key: 'idle', tag: 'B', title: '余烬远征', sub: '横版挂机 · 必杀特写 · 章节远征', color: '#ffd24a', rec: true },
     { key: 'survivor', tag: 'C', title: '灰烬独行者', sub: '竖屏割草 · 战法牧 · 肉鸽构筑', color: '#ff5a5a' },
   ];
 
@@ -52,11 +52,13 @@
         ctx.beginPath(); ctx.arc(sx - 24 + i * 12, 30 + (i % 2) * 6, 5, 0, Math.PI * 2); ctx.fill();
       }
     } else if (key === 'idle') {
-      var k = (t % 2.2) / 2.2;
-      var shake = k < 0.5 ? Math.sin(t * 50) * 2 * k : 0;
-      var col = ER.Loot.RARITY[Math.floor(t / 2.2) % 5].color;
-      if (k > 0.5) G.rays(ctx, 0, 0, 56, col, t, 10, 0.5);
-      ER.drawChest(ctx, shake, 14, 0.42, k > 0.5 ? Math.min(1, (k - 0.5) * 6) : 0, col, k > 0.5 ? 0.6 : 0.2);
+      G.glow(ctx, 22, -26, 34, '#ffd9a0', 0.6);
+      ctx.fillStyle = '#fff6dc'; ctx.beginPath(); ctx.arc(22, -26, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#2e5a48';
+      ctx.beginPath(); ctx.moveTo(-60, 38); ctx.lineTo(-30, 4); ctx.lineTo(0, 24); ctx.lineTo(30, -2); ctx.lineTo(60, 38); ctx.closePath(); ctx.fill();
+      ER.Sprites.drawHero(ctx, -14, 40, { kind: 'warrior', s: 0.8, face: 1, walk: t * 10, moving: true });
+      ER.Sprites.drawHero(ctx, -40, 40, { kind: 'mage', s: 0.8, face: 1, walk: t * 10 + 1, moving: true });
+      ER.Sprites.blitMonster(ctx, 'slime', 36, 40, 28, t, -1);
     } else {
       G.glow(ctx, 0, 0, 40, '#ff6b4a', 0.4);
       for (var j = 0; j < 9; j++) {
@@ -118,7 +120,7 @@
         G.roundRect(ctx, 400, y + 18 + oy, 100, 30, 15);
         ctx.fillStyle = '#ff8a3a';
         ctx.fill();
-        G.text(ctx, '主策推荐', 450, y + 33 + oy, { size: 15, weight: 'bold', align: 'center', color: '#2a0e00', shadow: false });
+        G.text(ctx, '主推', 450, y + 33 + oy, { size: 15, weight: 'bold', align: 'center', color: '#2a0e00', shadow: false });
       }
       ctx.restore();
     }
@@ -131,7 +133,7 @@
     }, { color: '#3a3346', size: 18, id: 'sound' });
     this.ui.button(ctx, 366, 830, 150, 54, this.confirmReset > 0 ? '再点一次确认' : '重置存档', function () {
       if (self.confirmReset > 0) {
-        ['er_raid_v1', 'er_idle_v1', 'er_surv_v1'].forEach(function (k) { P.storage.remove(k); });
+        ['er_raid_v1', 'er_idle_v1', 'er_exp_v1', 'er_surv_v1'].forEach(function (k) { P.storage.remove(k); });
         self.confirmReset = 0;
         self.resetDone = 2;
         A.play('boom');

@@ -226,6 +226,8 @@
     ghoul: { body: '#6ab04a', belly: '#a8d88a', h: 40 },
     brute: { body: '#d0782a', belly: '#f0c08a', h: 56 },
     king: { body: '#4a1a1a', belly: '#ff6a1a', h: 90 },
+    slime: { body: '#5ad07a', belly: '#c8ffd8', h: 34 },
+    wisp: { body: '#ff9a3a', belly: '#fff2a0', h: 40 },
   };
 
   /** 绘制怪物；f = 动画相位(0~1)，tint 可替换主色 */
@@ -309,6 +311,49 @@
       ctx.beginPath(); ctx.ellipse(0, -10, 7, 10, 0, 0, Math.PI * 2); blob(ctx, '#7a5a3a', 2);
       ctx.restore();
       limb(ctx, 14, -38, 18, -24, 8, body);
+      ctx.restore();
+    } else if (type === 'slime') {
+      // 史莱姆：弹跳挤压
+      var sq = Math.sin(t);
+      var sw2 = 1 + sq * 0.12, sh2 = 1 - sq * 0.12;
+      var hop2 = Math.max(0, -Math.sin(t)) * -8;
+      ctx.save(); ctx.translate(0, hop2); ctx.scale(sw2, sh2);
+      ctx.beginPath();
+      ctx.moveTo(-17, 0); ctx.quadraticCurveTo(-19, -26, 0, -28); ctx.quadraticCurveTo(19, -26, 17, 0); ctx.quadraticCurveTo(0, 3, -17, 0);
+      ctx.closePath();
+      ctx.globalAlpha = 0.92;
+      blob(ctx, body);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath(); ctx.ellipse(-7, -19, 5, 3.5, -0.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = U.mix(body, '#000', 0.25);
+      ctx.beginPath(); ctx.arc(6, -8, 2.5, 0, Math.PI * 2); ctx.arc(-4, -5, 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = OUT;
+      ctx.beginPath(); ctx.ellipse(-4, -15, 2.4, 3.4, 0, 0, Math.PI * 2); ctx.ellipse(5, -15, 2.4, 3.4, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.fillRect(-4.5, -17, 1.3, 1.3); ctx.fillRect(4.5, -17, 1.3, 1.3);
+      ctx.strokeStyle = OUT; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0.5, -10, 2.5, 0.2, Math.PI - 0.2); ctx.stroke();
+      ctx.restore();
+    } else if (type === 'wisp') {
+      // 火灵：漂浮的火焰
+      var fy = -24 + Math.sin(t) * 4;
+      ctx.save(); ctx.translate(0, fy);
+      ctx.globalCompositeOperation = 'lighter';
+      G.glow(ctx, 0, 0, 36, body, 0.6);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.beginPath();
+      ctx.moveTo(0, 14);
+      ctx.quadraticCurveTo(-15, 10, -13, -4);
+      ctx.quadraticCurveTo(-11, -14, -4 + Math.sin(t * 2) * 3, -26);
+      ctx.quadraticCurveTo(-2, -16, 2, -18);
+      ctx.quadraticCurveTo(6 + Math.sin(t * 2 + 1) * 3, -30, 8, -20);
+      ctx.quadraticCurveTo(15, -8, 13, 2);
+      ctx.quadraticCurveTo(10, 12, 0, 14);
+      ctx.closePath();
+      blob(ctx, body, 2);
+      ctx.beginPath(); ctx.ellipse(0, 3, 8, 9, 0, 0, Math.PI * 2); ctx.fillStyle = belly; ctx.fill();
+      ctx.fillStyle = OUT;
+      ctx.beginPath(); ctx.ellipse(-3.5, 0, 2, 3, 0, 0, Math.PI * 2); ctx.ellipse(4, 0, 2, 3, 0, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     } else if (type === 'king') {
       var br = Math.sin(t);
