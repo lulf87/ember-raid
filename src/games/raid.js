@@ -9,6 +9,12 @@
 
   var ARENA_TOP = 92, ARENA_BOTTOM = 752;
   var BOSS_X = 270, BOSS_Y = 215, BOSS_R = 74;
+  var BOSS_FOOT = BOSS_Y + 92;          // 首领原画脚底所在的 y
+  var BODY_RX = 128, BODY_RY = 96;      // 首领身体占地（椭圆），角色不能走进去
+  var WALL_L = 58, WALL_R = 482;        // 战场左右墙内侧
+  var RALLY_X0 = 146, RALLY_X1 = 394;   // 集合点横向范围：保证整个阵型在墙内
+  var DANGER = '#ff3b2f';              // 所有首领的危险区统一用红色
+  function art() { return ER.RaidArt && ER.RaidArt.ready; }
 
   var MEMBERS = [
     { id: 'tank', kind: 'warrior', name: '铁砧', role: '坦克', color: '#5b8cff', glyph: 'shield', baseDps: 30, hp: 1700, range: 110, interval: 1.0, ox: 0, oy: -62 },
@@ -135,17 +141,26 @@
     ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.ellipse(x, y, 17, 6, 0, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
-    ER.Sprites.drawHero(ctx, x, y, {
-      kind: m.def.kind, face: m.face || 1, walk: m.walk || 0, moving: m.moving, atk: m.atkAnim || 0,
-      hurt: m.hitFlash, s: 1.0, glow: opt.ult ? '#ffb347' : null,
-    });
+    var top = 64;
+    if (art()) {
+      var h = ER.RaidArt.drawHero(ctx, m.def.id, x, y, {
+        walk: m.walk || 0, moving: m.moving, atk: m.atkAnim || 0, lean: x < BOSS_X ? 1 : -1, hurt: m.hitFlash, ult: opt.ult,
+      });
+      top = h + 6;
+    } else {
+      ER.Sprites.drawHero(ctx, x, y, {
+        kind: m.def.kind, face: m.face || 1, walk: m.walk || 0, moving: m.moving, atk: m.atkAnim || 0,
+        hurt: m.hitFlash, s: 1.0, glow: opt.ult ? '#ffb347' : null,
+      });
+    }
     if (m.hp < m.maxHp) {
-      G.bar(ctx, x - 18, y - 64, 36, 6, m.hp / m.maxHp, m.hp / m.maxHp < 0.35 ? '#ff4a4a' : '#5ae05a', { border: false });
+      G.bar(ctx, x - 18, y - top, 36, 6, m.hp / m.maxHp, m.hp / m.maxHp < 0.35 ? '#ff4a4a' : '#5ae05a', { border: false });
     }
   }
 
   /** 小头像：用于团队框体与大厅列表 */
   function drawPortrait(ctx, d, x, y, size, dead) {
+    if (art()) { ER.RaidArt.drawPortrait(ctx, d.id, x, y, size * 2.2, { dead: dead, color: d.color }); return; }
     ctx.save();
     ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2);
     ctx.fillStyle = dead ? '#2a2630' : U.mix(d.color, '#000000', 0.55);
@@ -345,6 +360,7 @@
 
   // ================================================================== 首领战
   function RaidBattle(save, tier, farm, attempt) {
+    if (ER.RaidArt) ER.RaidArt.load();
     this.save = save;
     this.boss = bossFor(tier);
     this.B = this.boss.def;
@@ -426,7 +442,7 @@
     var dx = (p.x - this.last.x) * 1.15, dy = (p.y - this.last.y) * 1.15;
     this.dragDist += Math.abs(dx) + Math.abs(dy);
     if (this.tut) this.tut.dragged += Math.abs(dx) + Math.abs(dy);
-    this.rally.x = U.clamp(this.rally.x + dx, 70, 470);
+    this.rally.x = U.clamp(this.rally.x + dx, RALLY_X0, RALLY_X1);
     this.rally.y = U.clamp(this.rally.y + dy, 330, 690);
     this.goal.x = this.rally.x; this.goal.y = this.rally.y;
     this.last = { x: p.x, y: p.y };
@@ -438,7 +454,7 @@
     this.dragging = false;
     // 轻点 = 把小队派到该位置
     if (this.dragDist < 10 && p.y < ARENA_BOTTOM) {
-      this.goal.x = U.clamp(p.x, 70, 470);
+      this.goal.x = U.clamp(p.x, RALLY_X0, RALLY_X1);
       this.goal.y = U.clamp(p.y, 330, 690);
       this.fx.ring(this.goal.x, this.goal.y, 4, 26, '#ffd27a', 0.4, 3);
     }
@@ -522,13 +538,17 @@
       var step = Math.min(gl, 520 * d);
       this.rally.x += (gdx / gl) * step; this.rally.y += (gdy / gl) * step;
     }
+    // 集合点在黄圈里时全队收拢站位，方便凑齐分摊人数
+    var rally = this.rally;
+    var huddle = this.hazards.some(function (h) { return h.type === 'soak' && U.dist(rally.x, rally.y, h.x, h.y) <= h.r; });
+    this.form = U.damp(this.form == null ? 1 : this.form, huddle ? 0.45 : 1, 8, d);
     for (var i = 0; i < this.party.length; i++) {
       var m = this.party[i];
       m.hitFlash = Math.max(0, m.hitFlash - d);
       m.atkAnim = Math.max(0, (m.atkAnim || 0) - d * 3.5);
       if (m.dead) continue;
-      var tx = U.clamp(this.rally.x + m.def.ox, 22, 518);
-      var ty = U.clamp(this.rally.y + m.def.oy, ARENA_TOP + 20, ARENA_BOTTOM - 16);
+      var tx = U.clamp(this.rally.x + m.def.ox * this.form, WALL_L, WALL_R);
+      var ty = U.clamp(this.rally.y + m.def.oy * this.form, ARENA_TOP + 20, ARENA_BOTTOM - 16);
       var dx = tx - m.x, dy = ty - m.y;
       var l = Math.sqrt(dx * dx + dy * dy);
       var sp = 430 * d;
@@ -539,12 +559,12 @@
       m.moving = l > 6;
       if (m.moving) m.walk += d * 14; else m.walk += d * 2;
       if (Math.abs(m.x - BOSS_X) > 10) m.face = m.x < BOSS_X ? 1 : -1;
-      // 不能穿过首领
-      var bd = U.dist(m.x, m.y, BOSS_X, BOSS_Y);
-      var minD = BOSS_R + 18;
-      if (bd < minD) {
-        var nx = (m.x - BOSS_X) / (bd || 1), ny = (m.y - BOSS_Y) / (bd || 1);
-        m.x = BOSS_X + nx * minD; m.y = BOSS_Y + ny * minD;
+      // 不能走进首领身体（椭圆占地）
+      var ex = (m.x - BOSS_X) / BODY_RX, ey = (m.y - BOSS_Y) / BODY_RY;
+      var e = Math.sqrt(ex * ex + ey * ey);
+      if (e < 1) {
+        if (e < 0.001) { ex = 0; ey = 1; e = 1; }
+        m.x = BOSS_X + (ex / e) * BODY_RX; m.y = BOSS_Y + (ey / e) * BODY_RY;
       }
     }
   };
@@ -647,21 +667,21 @@
       var targets = U.shuffle(alive.slice()).slice(0, n);
       var list = [];
       for (var i = 0; i < targets.length; i++) {
-        list.push({ type: 'circle', key: 'pools', x: targets[i].x, y: targets[i].y, r: 58, t: 0, dur: dur + i * 0.12, dmg: 380 * ds, burn: true, color: B.burn });
+        list.push({ type: 'circle', key: 'pools', x: targets[i].x, y: targets[i].y, r: 58, t: 0, dur: dur + i * 0.12, dmg: 380 * ds, burn: true, color: DANGER });
       }
       this.addHazards(list, name);
       A.play('fire');
     } else if (pick === 'sweep') {
       dur = 1.8;
       if (Math.random() < 0.5) {
-        this.addHazards([{ type: 'hband', key: 'sweep', y: U.clamp(cen.y, ARENA_TOP + 60, ARENA_BOTTOM - 60), h: 124, t: 0, dur: dur, dmg: 520 * ds, color: B.burn }], name);
+        this.addHazards([{ type: 'hband', key: 'sweep', y: U.clamp(cen.y, ARENA_TOP + 60, ARENA_BOTTOM - 60), h: 124, t: 0, dur: dur, dmg: 520 * ds, color: DANGER }], name);
       } else {
-        this.addHazards([{ type: 'vband', key: 'sweep', x: U.clamp(cen.x, 70, 470), w: 150, t: 0, dur: dur, dmg: 520 * ds, color: B.burn }], name);
+        this.addHazards([{ type: 'vband', key: 'sweep', x: U.clamp(cen.x, 70, 470), w: 150, t: 0, dur: dur, dmg: 520 * ds, color: DANGER }], name);
       }
       A.play('warn');
     } else if (pick === 'nova') {
       dur = 2.3;
-      this.addHazards([{ type: 'circle', key: 'nova', x: BOSS_X, y: BOSS_Y, r: 300, t: 0, dur: dur, dmg: 640 * ds, color: B.burn, big: true, nova: true }], name);
+      this.addHazards([{ type: 'circle', key: 'nova', x: BOSS_X, y: BOSS_Y, r: 300, t: 0, dur: dur, dmg: 640 * ds, color: DANGER, big: true, nova: true }], name);
       A.play('warn');
     } else {
       dur = 2.9;
@@ -973,7 +993,7 @@
       // 躲开：红圈罩住全队，必须拖出去
       if (!tu.spawned && tu.t > 0.5) {
         tu.spawned = true;
-        this.addHazards([{ type: 'circle', key: 'pools', x: this.rally.x, y: this.rally.y + 10, r: 100, t: 0, dur: 3.2, dmg: 90, color: B.burn, tut: true }], B.mechs.pools.name);
+        this.addHazards([{ type: 'circle', key: 'pools', x: this.rally.x, y: this.rally.y + 10, r: 100, t: 0, dur: 3.2, dmg: 90, color: DANGER, tut: true }], B.mechs.pools.name);
         this.cast = { name: B.mechs.pools.name, t: 0, dur: 3.2 };
         A.play('warn');
       }
@@ -991,7 +1011,7 @@
       // 抢输出：躲开新星 → 破绽窗口 → 回身开战旗
       if (!tu.spawned && tu.t > 0.6) {
         tu.spawned = true;
-        this.addHazards([{ type: 'circle', key: 'nova', x: BOSS_X, y: BOSS_Y, r: 300, t: 0, dur: 3.6, dmg: 90, color: B.burn, big: true, nova: true, tut: true }], B.mechs.nova.name);
+        this.addHazards([{ type: 'circle', key: 'nova', x: BOSS_X, y: BOSS_Y, r: 300, t: 0, dur: 3.6, dmg: 90, color: DANGER, big: true, nova: true, tut: true }], B.mechs.nova.name);
         this.cast = { name: B.mechs.nova.name, t: 0, dur: 3.6 };
         A.play('warn');
       }
@@ -1138,7 +1158,8 @@
   // ---------------- 绘制 ----------------
   RaidBattle.prototype.render = function (ctx) {
     var self = this, B = this.B;
-    ctx.drawImage(getFloor(B), 0, 0);
+    if (art()) ER.RaidArt.drawFloor(ctx, B.shape, this.t);
+    else ctx.drawImage(getFloor(B), 0, 0);
     ctx.save();
     ctx.translate(this.fx.sx, this.fx.sy);
     var i;
@@ -1164,14 +1185,18 @@
       ctx.beginPath(); ctx.arc(this.rally.x, this.rally.y, 26 * pulse, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
     }
-    // 首领
-    if (this.state !== 'victory' || this.stateT < 0.25) {
-      drawBoss(ctx, B, BOSS_X, BOSS_Y, BOSS_R, this.t, this.bossHurt, this.enraged || this.phase2, this.bossSlam);
-    }
-    // 小队
+    // 首领与小队按脚底 y 排序绘制（站在首领身后的人被遮挡）
     var ult = this.ultT > 0;
-    for (i = 0; i < this.party.length; i++) drawMember(ctx, this.party[i], this.t, { ult: ult });
+    var showBoss = this.state !== 'victory' || this.stateT < 0.25;
+    var order = this.party.slice().sort(function (a, b) { return a.y - b.y; });
+    var bossDrawn = !showBoss;
+    for (i = 0; i < order.length; i++) {
+      if (!bossDrawn && order[i].y > BOSS_FOOT) { this.drawBossNow(ctx); bossDrawn = true; }
+      drawMember(ctx, order[i], this.t, { ult: ult });
+    }
+    if (!bossDrawn) this.drawBossNow(ctx);
     this.renderMemberStatus(ctx);
+    this.renderSoakCount(ctx);
     // 投射物
     for (i = 0; i < this.projs.length; i++) {
       var p = this.projs[i];
@@ -1280,6 +1305,18 @@
     void self;
   };
 
+  RaidBattle.prototype.drawBossNow = function (ctx) {
+    var B = this.B;
+    if (art()) {
+      G.glow(ctx, BOSS_X, BOSS_Y, 190, B.c1, this.enraged || this.phase2 ? 0.35 : 0.2);
+      ER.RaidArt.drawBoss(ctx, B.shape, BOSS_X, BOSS_FOOT, {
+        t: this.t, hurt: this.bossHurt, slam: this.bossSlam, enraged: this.enraged || this.phase2, vuln: this.vulnT > 0,
+      });
+    } else {
+      drawBoss(ctx, B, BOSS_X, BOSS_Y, BOSS_R, this.t, this.bossHurt, this.enraged || this.phase2, this.bossSlam);
+    }
+  };
+
   /** 角色状态标记：站在红圈里显示「!」，站在黄圈里显示「✓」 */
   RaidBattle.prototype.renderMemberStatus = function (ctx) {
     for (var i = 0; i < this.party.length; i++) {
@@ -1299,17 +1336,17 @@
         ctx.save();
         ctx.strokeStyle = '#ff2a2a'; ctx.lineWidth = 3;
         ctx.beginPath(); ctx.ellipse(m.x, m.y, 19 * p, 7 * p, 0, 0, Math.PI * 2); ctx.stroke();
-        ctx.beginPath(); ctx.arc(m.x, m.y - 80, 11, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(m.x, m.y - 88, 11, 0, Math.PI * 2);
         ctx.fillStyle = '#ff2a2a'; ctx.fill();
         ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
-        G.text(ctx, '!', m.x, m.y - 79, { size: 16, weight: 'bold', align: 'center', color: '#fff', shadow: false });
+        G.text(ctx, '!', m.x, m.y - 87, { size: 16, weight: 'bold', align: 'center', color: '#fff', shadow: false });
         ctx.restore();
       } else if (soak) {
         ctx.save();
-        ctx.beginPath(); ctx.arc(m.x, m.y - 80, 10, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(m.x, m.y - 88, 10, 0, Math.PI * 2);
         ctx.fillStyle = '#2f9e4a'; ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;
-        ctx.beginPath(); ctx.moveTo(m.x - 5, m.y - 80); ctx.lineTo(m.x - 1, m.y - 76); ctx.lineTo(m.x + 5, m.y - 84); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(m.x - 5, m.y - 88); ctx.lineTo(m.x - 1, m.y - 84); ctx.lineTo(m.x + 5, m.y - 92); ctx.stroke();
         ctx.restore();
       }
     }
@@ -1324,6 +1361,25 @@
       ctx.setLineDash([]);
       ctx.restore();
       G.text(ctx, '破绽 ×2  ' + this.vulnT.toFixed(1) + 's', BOSS_X, BOSS_Y + BOSS_R + 44, { size: 20, weight: 'bold', align: 'center', color: '#ffcf4a', stroke: '#3a2000', strokeWidth: 5 });
+    }
+  };
+
+  /** 黄圈人数：画在最上层、圈的下沿，不会被角色和伤害数字挡住 */
+  RaidBattle.prototype.renderSoakCount = function (ctx) {
+    var self = this;
+    for (var i = 0; i < this.hazards.length; i++) {
+      var h = this.hazards[i];
+      if (h.type !== 'soak') continue;
+      var need = this.alive().length;
+      var inCount = this.alive().filter(function (m) { return self.inHazard(h, m); }).length;
+      var full = inCount >= need;
+      var y = h.y + h.r + 24;
+      if (y > ARENA_BOTTOM - 22) y = h.y - h.r - 24;
+      var col = full ? '#7dff9a' : '#ffd84a';
+      G.roundRect(ctx, h.x - 70, y - 19, 140, 38, 19);
+      ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = col; ctx.stroke();
+      G.text(ctx, '分摊 ' + inCount + '/' + need, h.x, y + 1, { size: 24, weight: 'bold', align: 'center', color: col, shadow: false });
     }
   };
 
@@ -1378,13 +1434,6 @@
       ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
       if (h.type === 'soak') {
-        var inCount = this.alive().filter(function (m) { return self.inHazard(h, m); }).length;
-        var need = this.alive().length;
-        var full = inCount >= need;
-        G.roundRect(ctx, h.x - 62, h.y - h.r - 44, 124, 34, 17);
-        ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fill();
-        ctx.lineWidth = 2.5; ctx.strokeStyle = full ? '#7dff9a' : '#ffd84a'; ctx.stroke();
-        G.text(ctx, '分摊 ' + inCount + '/' + need, h.x, h.y - h.r - 27, { size: 22, weight: 'bold', align: 'center', color: full ? '#7dff9a' : '#ffd84a', shadow: false });
         // 下落的陨石
         var my = U.lerp(h.y - 500, h.y, U.easeInCubic(k));
         G.glow(ctx, h.x, my, 40, '#ffd84a', 0.9);
@@ -1731,6 +1780,7 @@
 
   // ================================================================== 团队大厅
   function RaidHub() {
+    if (ER.RaidArt) ER.RaidArt.load();
     this.save = loadSave();
     this.ui = new ER.UI();
     this.fx = new ER.FX();
@@ -1764,7 +1814,13 @@
     var boss = bossFor(save.tier);
     var B = boss.def;
     G.panel(ctx, 16, 70, 508, 250, { border: U.rgba(B.c1, 0.6) });
-    drawBoss(ctx, B, 110, 190, 52, this.t, 0, false);
+    if (art()) {
+      ctx.save();
+      G.roundRect(ctx, 18, 72, 176, 246, 12); ctx.clip();
+      G.glow(ctx, 106, 190, 120, B.c1, 0.3);
+      ER.RaidArt.drawBoss(ctx, B.shape, 106, 300, { t: this.t, scale: 0.62 });
+      ctx.restore();
+    } else drawBoss(ctx, B, 110, 190, 52, this.t, 0, false);
     G.text(ctx, '下一个首领 · 第 ' + save.tier + ' 层', 200, 100, { size: 15, color: '#bbb' });
     G.text(ctx, B.name, 200, 132, { size: 24, weight: 'bold', color: B.c1 });
     G.text(ctx, B.title, 200, 162, { size: 15, color: '#999' });
