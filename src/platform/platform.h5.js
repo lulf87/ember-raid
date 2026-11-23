@@ -1,7 +1,7 @@
 /**
  * 平台适配层（H5 浏览器实现）
  * ------------------------------------------------------------
- * 业务代码只允许通过 ER.platform 访问底层能力：
+ * 业务代码只允许通过 ER.platform 访问底层能力（含 loadImage 图片加载）：
  *   画布 / 尺寸 / 触控 / 存档 / 音频上下文 / 震动 / 激励视频 / 前后台切换 / 帧循环
  * 迁移微信小游戏时，只需新写一个 platform.wx.js 实现同样的接口：
  *   getCanvas        -> wx.createCanvas()
@@ -52,6 +52,16 @@
     var c = document.createElement('canvas');
     c.width = w; c.height = h;
     return c;
+  };
+
+  /** 加载图片资源（美术素材）；微信下对应 wx.createImage() */
+  P.loadImage = function (src) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { reject(new Error('图片加载失败：' + src)); };
+      img.src = src;
+    });
   };
 
   P.onResize = function (cb) {

@@ -127,7 +127,7 @@
 
   function drawMember(ctx, m, t, opt) {
     opt = opt || {};
-    var x = m.x, y = m.y + 14;
+    var x = m.x, y = m.y; // m.x/m.y 即脚底判定点
     if (m.dead) { ER.Sprites.drawTomb(ctx, x, y, 1); return; }
     // 脚下职业色光圈，方便一眼认出谁是谁
     ctx.save();
@@ -344,7 +344,7 @@
   }
 
   // ================================================================== 首领战
-  function RaidBattle(save, tier, farm) {
+  function RaidBattle(save, tier, farm, attempt) {
     this.save = save;
     this.boss = bossFor(tier);
     this.B = this.boss.def;
@@ -391,8 +391,15 @@
       };
     });
     this.say(U.pick(QUIPS.pull));
-    // 新手教学：第一次打第 1 层时开启
-    if (!save.tutRaid && tier === 1 && !this.farm) { this.tut = { step: 0, t: 0, dragged: 0, result: null }; this.hintT = 0; }
+    this.attempt = attempt || 1;
+    this.deaths = [];
+    this.castPend = {};
+    this.pendingTexts = [];
+    this.teamRes = null;
+    this.vulnT = 0;
+    this.vulnDmg = 0;
+    // 新手教学：首战教会「躲开 → 回身 → 抢输出」
+    if (!save.tutRaid2 && tier === 1 && !this.farm) { this.tut = { step: 0, t: 0, dragged: 0, result: null, tries: 0 }; this.hintT = 0; }
     this.drops = [];
     self.ENRAGE = 180;
   }
@@ -426,7 +433,7 @@
     this.hintT = Math.min(this.hintT, 0.6);
   };
   RaidBattle.prototype.onUp = function (p) {
-    if (this.tut && this.tut.step === 0 && this.tut.t > 0.6) { this.tutNext(); this.dragging = false; return; }
+    if (this.tut && this.tut.step === 0 && this.tut.t > 0.6 && this.state === 'fight') { this.tutNext(); this.dragging = false; return; }
     if (!this.dragging) return;
     this.dragging = false;
     // 轻点 = 把小队派到该位置
@@ -455,6 +462,13 @@
     this.bossGhost = U.damp(this.bossGhost, this.bossHp / this.boss.maxHp, 3, d);
     this.hintT -= dt;
     for (var c = this.chat.length - 1; c >= 0; c--) { this.chat[c].t -= dt; if (this.chat[c].t <= 0) this.chat.splice(c, 1); }
+    for (var q = this.pendingTexts.length - 1; q >= 0; q--) {
+      var pt = this.pendingTexts[q];
+      pt.t -= d;
+      if (pt.t <= 0) { this.pendingTexts.splice(q, 1); this.fx.text(pt.txt.x, pt.txt.y, pt.txt.s, { color: pt.txt.c, size: 17, vy: -50 }); }
+    }
+    if (this.teamRes) { this.teamRes.t -= dt; if (this.teamRes.t <= 0) this.teamRes = null; }
+    if (this.soakHint) { this.soakHint.t += dt; if (this.soakHint.t > 2.6 || !this.hazards.some(function (h) { return h.type === 'soak'; })) this.soakHint = null; }
 
     this.updateParty(d);
     this.updateProjs(d);
@@ -463,13 +477,19 @@
       if (this.stateT > 1.6) { this.state = 'fight'; this.stateT = 0; }
       return;
     }
-    if (this.state === 'fight' && this.tut && this.tut.step < 5) {
-      this.ultCd = this.tut.step === 4 ? 0 : 99;
+    if (this.state === 'fight' && this.tut && this.tut.step < 4) {
+      var tu = this.tut;
+      if (tu.step === 3 && this.vulnT > 0 && !tu.ultUsed) this.ultCd = 0;
+      else if (!tu.ultUsed) this.ultCd = 99;
+      else this.ultCd = Math.max(0, this.ultCd - d);
       this.ultT = Math.max(0, this.ultT - d);
+      if (this.vulnT > 0) this.vulnT = Math.max(0, this.vulnT - d);
+      this.fightTime += d;
       this.updateTutorial(dt);
       this.updateHazards(d);
       this.updateAttacks(d);
-      if (this.bossHp < this.boss.maxHp * 0.85) this.bossHp = this.boss.maxHp * 0.85;
+      var floorPct = tu.step === 3 ? 0.6 : 0.85;
+      if (this.bossHp < this.boss.maxHp * floorPct) this.bossHp = this.boss.maxHp * floorPct;
       return;
     }
     if (this.state === 'fight') {
@@ -529,17 +549,27 @@
     }
   };
 
-  RaidBattle.prototype.damageMember = function (m, dmg, avoidable, color) {
+  /**
+   * cause: { key: pools|burn|sweep|nova|soak|melee, label } 用于团灭复盘
+   * delayText: 红圈结算时先显示全队结果，个人伤害数字稍后再飘
+   */
+  RaidBattle.prototype.damageMember = function (m, dmg, avoidable, color, cause, delayText) {
     if (m.dead || dmg <= 0) return;
     dmg = Math.round(dmg);
     m.hp -= dmg;
     m.taken += dmg;
     m.hitFlash = 0.15;
     if (avoidable) { m.avoid += dmg; this.avoidable += dmg; }
-    if (dmg > 60) this.fx.text(m.x + U.rand(-8, 8), m.y - 26, '-' + dmg, { color: color || '#ff5a5a', size: 17, vy: -50 });
+    if (cause) m.lastCause = cause;
+    if (dmg > 60) {
+      var txt = { x: m.x + U.rand(-8, 8), y: m.y - 64, s: '-' + dmg, c: color || '#ff5a5a' };
+      if (delayText) this.pendingTexts.push({ t: 0.45, txt: txt });
+      else this.fx.text(txt.x, txt.y, txt.s, { color: txt.c, size: 17, vy: -50 });
+    }
     if (m.hp <= 0) {
       m.hp = 0;
       m.dead = true;
+      this.deaths.push({ m: m, t: this.fightTime, cause: m.lastCause || { key: 'melee', label: '首领重击' } });
       A.play('death');
       this.fx.burst(m.x, m.y, { n: 18, color: m.def.color, speed: 200, life: 0.7 });
       this.say(QUIPS.death[m.def.id]);
@@ -562,6 +592,12 @@
       this.banner = { s: '首领狂暴了！伤害大幅提升', t: 2.5, c: '#ff3a3a' };
       A.play('warn');
     }
+    if (this.vulnT > 0) {
+      // 破绽期间首领不攻击、不放技能
+      this.vulnT = Math.max(0, this.vulnT - d);
+      if (this.cast) { this.cast.t += d; if (this.cast.t >= this.cast.dur) this.cast = null; }
+      return;
+    }
     // 普攻坦克
     this.bossAtkT -= d;
     if (this.bossAtkT <= 0) {
@@ -574,8 +610,8 @@
           return U.dist2(a.x, a.y, BOSS_X, BOSS_Y) < U.dist2(b.x, b.y, BOSS_X, BOSS_Y) ? a : b;
         });
         var dmg = 105 * ds * (target === tank ? 1 : 2.4);
-        this.damageMember(target, dmg, false, '#ff8a6a');
-        this.fx.burst(target.x, target.y - 6, { n: 6, color: B.c1, speed: 160, life: 0.35 });
+        this.damageMember(target, dmg, false, '#ff8a6a', target === tank ? { key: 'melee', label: '首领重击' } : { key: 'melee', label: '坦克倒下后被首领追打' });
+        this.fx.burst(target.x, target.y - 28, { n: 6, color: B.c1, speed: 160, life: 0.35 });
         A.play('hitSoft');
       }
     }
@@ -609,37 +645,80 @@
       dur = 1.5;
       var n = Math.min(alive.length, 2 + Math.floor(this.boss.tier / 3) + (this.phase2 ? 1 : 0));
       var targets = U.shuffle(alive.slice()).slice(0, n);
+      var list = [];
       for (var i = 0; i < targets.length; i++) {
-        this.hazards.push({ type: 'circle', x: targets[i].x, y: targets[i].y, r: 58, t: 0, dur: dur + i * 0.12, dmg: 380 * ds, burn: true, color: B.burn });
+        list.push({ type: 'circle', key: 'pools', x: targets[i].x, y: targets[i].y, r: 58, t: 0, dur: dur + i * 0.12, dmg: 380 * ds, burn: true, color: B.burn });
       }
+      this.addHazards(list, name);
       A.play('fire');
     } else if (pick === 'sweep') {
       dur = 1.8;
       if (Math.random() < 0.5) {
-        this.hazards.push({ type: 'hband', y: U.clamp(cen.y, ARENA_TOP + 60, ARENA_BOTTOM - 60), h: 124, t: 0, dur: dur, dmg: 520 * ds, color: B.burn });
+        this.addHazards([{ type: 'hband', key: 'sweep', y: U.clamp(cen.y, ARENA_TOP + 60, ARENA_BOTTOM - 60), h: 124, t: 0, dur: dur, dmg: 520 * ds, color: B.burn }], name);
       } else {
-        this.hazards.push({ type: 'vband', x: U.clamp(cen.x, 70, 470), w: 150, t: 0, dur: dur, dmg: 520 * ds, color: B.burn });
+        this.addHazards([{ type: 'vband', key: 'sweep', x: U.clamp(cen.x, 70, 470), w: 150, t: 0, dur: dur, dmg: 520 * ds, color: B.burn }], name);
       }
       A.play('warn');
     } else if (pick === 'nova') {
       dur = 2.3;
-      this.hazards.push({ type: 'circle', x: BOSS_X, y: BOSS_Y, r: 300, t: 0, dur: dur, dmg: 640 * ds, color: B.burn, big: true, nova: true });
+      this.addHazards([{ type: 'circle', key: 'nova', x: BOSS_X, y: BOSS_Y, r: 300, t: 0, dur: dur, dmg: 640 * ds, color: B.burn, big: true, nova: true }], name);
       A.play('warn');
     } else {
       dur = 2.9;
       var sx = U.rand(110, 430), sy = U.rand(450, 650);
-      this.hazards.push({ type: 'soak', x: sx, y: sy, r: 80, t: 0, dur: dur, dmg: 420 * ds, color: '#ffd84a', big: true });
+      this.addHazards([{ type: 'soak', key: 'soak', x: sx, y: sy, r: 80, t: 0, dur: dur, dmg: 420 * ds, color: '#ffd84a', big: true }], name);
       this.say(U.pick(QUIPS.soak));
       A.play('warn');
+      if (!this.save.tutSoak) {
+        // 第一次遇到黄圈：放慢时间并给出提示
+        this.save.tutSoak = true;
+        writeSave(this.save);
+        this.soakHint = { t: 0 };
+        this.slowmo(0.35, 1.6);
+      }
     }
     this.cast = { name: name, t: 0, dur: dur };
   };
 
+  /** 同一次施法的多个危险区归为一组，全部结算后统一给出全队结果 */
+  RaidBattle.prototype.addHazards = function (list, name) {
+    var cid = U.uid();
+    this.castPend[cid] = { n: list.length, hit: [], name: name, total: this.alive().length, soak: list[0].type === 'soak' };
+    for (var i = 0; i < list.length; i++) {
+      list[i].cid = cid;
+      list[i].name = name;
+      this.hazards.push(list[i]);
+    }
+  };
+
+  /** 判定点 = 角色脚底中心，与画面上的圈边界完全一致 */
   RaidBattle.prototype.inHazard = function (h, m) {
-    if (h.type === 'circle' || h.type === 'soak') return U.dist(m.x, m.y, h.x, h.y) <= h.r + 6;
-    if (h.type === 'hband') return Math.abs(m.y - h.y) <= h.h / 2 + 6;
-    if (h.type === 'vband') return Math.abs(m.x - h.x) <= h.w / 2 + 6;
+    if (h.type === 'circle' || h.type === 'soak') return U.dist(m.x, m.y, h.x, h.y) <= h.r;
+    if (h.type === 'hband') return Math.abs(m.y - h.y) <= h.h / 2;
+    if (h.type === 'vband') return Math.abs(m.x - h.x) <= h.w / 2;
     return false;
+  };
+
+  RaidBattle.prototype.showTeamResult = function (pend, inCount) {
+    var alive = this.alive();
+    var cx = 0, cy = 0;
+    alive.forEach(function (m) { cx += m.x; cy += m.y; });
+    if (alive.length) { cx /= alive.length; cy /= alive.length; } else { cx = this.rally.x; cy = this.rally.y; }
+    var r;
+    if (pend.soak) {
+      var ok = inCount >= pend.total;
+      r = { s: ok ? '分摊成功 ' + inCount + '/' + pend.total : '分摊失败 ' + inCount + '/' + pend.total, sub: ok ? '全员到齐' : '人没站齐，全团受到重创', c: ok ? '#7dff9a' : '#ffd84a' };
+    } else if (!pend.hit.length) {
+      r = { s: '全队躲开！', sub: pend.name + ' 0 人中招', c: '#7dff9a' };
+    } else {
+      r = { s: '中招 ' + pend.hit.length + '/' + pend.total, sub: pend.hit.map(function (m) { return m.def.name; }).join(' · '), c: '#ff6a5a' };
+    }
+    // 固定在不挡首领、不挡小队的一侧：小队在上半场就显示在下方，反之显示在首领下方
+    r.x = 270;
+    r.y = cy < 500 ? ARENA_BOTTOM - 70 : BOSS_Y + BOSS_R + 120;
+    r.t = 1.7;
+    r.max = 1.7;
+    this.teamRes = r;
   };
 
   RaidBattle.prototype.updateHazards = function (d) {
@@ -669,7 +748,7 @@
         m = this.party[j];
         if (m.dead) continue;
         if (U.dist(m.x, m.y, b.x, b.y) < b.r) {
-          this.damageMember(m, b.dps * d, true);
+          this.damageMember(m, b.dps * d, true, null, { key: 'burn', label: '燃烧地面' });
           m.hitFlash = 0.1;
           if (!this.fireQuipT || this.t - this.fireQuipT > 8) { this.fireQuipT = this.t; this.say(U.pick(QUIPS.fire)); }
         }
@@ -683,24 +762,33 @@
     var hit = alive.filter(function (m) { return self.inHazard(h, m); });
     if (h.tut && this.tut) this.tut.result = h.type === 'soak' ? (hit.length >= alive.length ? 'ok' : 'hit') : (hit.length ? 'hit' : 'ok');
     var key = h.id;
+    var pend = this.castPend[h.cid];
+    var cause = { key: h.key || 'pools', label: h.name || '技能' };
     this.fx.shake(h.big ? 12 : 6, 0.3);
     if (h.type === 'soak') {
       if (hit.length < alive.length) {
-        alive.forEach(function (m) { self.damageMember(m, h.dmg, true, '#ffd84a'); });
+        var sc = { key: 'soak', label: (h.name || '分摊') + '（人数不足）' };
+        alive.forEach(function (m) { self.damageMember(m, h.dmg, true, '#ffd84a', sc, true); });
         this.fx.flash('#ffd84a', 0.35, 2.5);
-        this.banner = { s: '分摊失败！全团受到重创', t: 1.6, c: '#ffd84a' };
       } else {
-        hit.forEach(function (m) { self.damageMember(m, h.dmg * 0.22, false, '#ffd84a'); });
-        this.banner = { s: '完美分摊！', t: 1.2, c: '#7dff9a' };
+        hit.forEach(function (m) { self.damageMember(m, h.dmg * 0.22, false, '#ffd84a', cause, true); });
         this.perfect++;
         this.slowmo(0.35, 0.35);
       }
+      if (pend) { this.showTeamResult(pend, hit.length); delete this.castPend[h.cid]; }
       this.fx.burst(h.x, h.y, { n: 50, colors: ['#ffd84a', '#fff'], speed: 380, life: 0.8, shape: 'spark' });
       this.fx.ring(h.x, h.y, h.r * 0.5, h.r * 1.6, '#ffd84a', 0.6, 8);
       A.play('boom');
       return;
     }
-    hit.forEach(function (m) { self.damageMember(m, h.dmg, true, '#ff5a5a'); });
+    hit.forEach(function (m) { self.damageMember(m, h.dmg, true, '#ff5a5a', cause, true); });
+    if (pend) {
+      hit.forEach(function (m) { if (pend.hit.indexOf(m) < 0) pend.hit.push(m); });
+      pend.n--;
+      if (pend.n <= 0) { this.showTeamResult(pend); delete this.castPend[h.cid]; }
+    }
+    // 新星结束后首领力竭，露出破绽
+    if (h.nova && this.state === 'fight') this.openVuln(h.tut ? 6 : 5);
     // 完美闪避：0.45 秒内还在圈里，现在已经出来
     var dodged = alive.filter(function (m) {
       var tIn = m.inside[key];
@@ -708,7 +796,7 @@
     });
     if (dodged.length) {
       this.perfect++;
-      this.fx.text(dodged[0].x, dodged[0].y - 40, '完美闪避！', { color: '#7dffef', size: 26, crit: true, life: 1.1 });
+      this.fx.text(dodged[0].x, dodged[0].y - 90, '完美闪避！', { color: '#7dffef', size: 26, crit: true, life: 1.1 });
       this.slowmo(0.3, 0.3);
       A.play('levelup', 0.3);
     }
@@ -718,7 +806,7 @@
       var n = h.nova ? 90 : 26;
       this.fx.burst(h.x, h.y, { n: n, colors: [h.color, '#fff2c0'], speed: h.nova ? 700 : 300, life: 0.7, size: 5, shape: 'spark' });
       this.fx.ring(h.x, h.y, h.r * 0.3, h.r * 1.1, h.color, 0.5, 10);
-      if (h.burn) this.burns.push({ x: h.x, y: h.y, r: h.r * 0.92, life: 7, max: 7, dps: 160 * this.boss.ds, color: h.color });
+      if (h.burn && !h.tut) this.burns.push({ x: h.x, y: h.y, r: h.r * 0.92, life: 7, max: 7, dps: 160 * this.boss.ds, color: h.color });
       A.play(h.nova ? 'boom' : 'hit');
     } else if (h.type === 'hband') {
       for (var x = 0; x <= 540; x += 40) this.fx.burst(x, h.y, { n: 3, color: h.color, speed: 260, life: 0.5, shape: 'spark' });
@@ -729,9 +817,21 @@
     }
   };
 
+  RaidBattle.prototype.openVuln = function (dur) {
+    this.vulnT = dur;
+    this.vulnMax = dur;
+    this.vulnDmg = 0;
+    this.bossSlam = 1;
+    this.banner = { s: '首领力竭！破绽 伤害×2', t: 1.8, c: '#ffcf4a' };
+    this.fx.shake(8, 0.3);
+    A.play('levelup');
+  };
+
   RaidBattle.prototype.hitBoss = function (m, dmg, crit) {
     if (this.state !== 'fight') return;
+    if (this.vulnT > 0) dmg *= 2;
     dmg = Math.round(dmg);
+    if (this.vulnT > 0) this.vulnDmg += dmg;
     this.bossHp -= dmg;
     m.dmg += dmg;
     this.bossHurt = 0.06;
@@ -773,9 +873,9 @@
           var real = Math.min(amt, low.maxHp - low.hp);
           low.hp += real;
           m.heal += real;
-          this.projs.push({ kind: 'heal', sx: m.x, sy: m.y, tx: low.x, ty: low.y, t: 0, dur: 0.18, color: '#7dffb0' });
-          this.fx.text(low.x, low.y - 30, '+' + Math.round(amt), { color: '#7dffb0', size: 16, vy: -50 });
-          this.fx.burst(low.x, low.y, { n: 6, color: '#7dffb0', speed: 80, life: 0.5, angle: -Math.PI / 2, spread: 1 });
+          this.projs.push({ kind: 'heal', sx: m.x, sy: m.y - 30, tx: low.x, ty: low.y - 30, t: 0, dur: 0.18, color: '#7dffb0' });
+          this.fx.text(low.x, low.y - 70, '+' + Math.round(amt), { color: '#7dffb0', size: 16, vy: -50 });
+          this.fx.burst(low.x, low.y - 24, { n: 6, color: '#7dffb0', speed: 80, life: 0.5, angle: -Math.PI / 2, spread: 1 });
           A.play('heal', 0.25);
           continue;
         }
@@ -786,16 +886,16 @@
       var crit = Math.random() < m.crit;
       var dmg = def.baseDps * def.interval * m.mult * (ult ? 1.6 : 1) * moveMul * (crit ? 2 : 1) * U.rand(0.9, 1.1);
       if (def.id === 'mage') {
-        this.projs.push({ kind: 'fireball', sx: m.x, sy: m.y, tx: BOSS_X + U.rand(-30, 30), ty: BOSS_Y + U.rand(-20, 30), t: 0, dur: 0.38, color: '#ff8a3a', m: m, dmg: dmg, crit: crit });
+        this.projs.push({ kind: 'fireball', sx: m.x, sy: m.y - 30, tx: BOSS_X + U.rand(-30, 30), ty: BOSS_Y + U.rand(-20, 30), t: 0, dur: 0.38, color: '#ff8a3a', m: m, dmg: dmg, crit: crit });
       } else if (def.id === 'hunter') {
-        this.projs.push({ kind: 'arrow', sx: m.x, sy: m.y, tx: BOSS_X + U.rand(-30, 30), ty: BOSS_Y + U.rand(-20, 30), t: 0, dur: 0.2, color: '#9ff0ff', m: m, dmg: dmg, crit: crit });
+        this.projs.push({ kind: 'arrow', sx: m.x, sy: m.y - 30, tx: BOSS_X + U.rand(-30, 30), ty: BOSS_Y + U.rand(-20, 30), t: 0, dur: 0.2, color: '#9ff0ff', m: m, dmg: dmg, crit: crit });
       } else if (def.id === 'heal') {
-        this.projs.push({ kind: 'holy', sx: m.x, sy: m.y, tx: BOSS_X, ty: BOSS_Y, t: 0, dur: 0.3, color: '#d8ffe0', m: m, dmg: dmg, crit: crit });
+        this.projs.push({ kind: 'holy', sx: m.x, sy: m.y - 30, tx: BOSS_X, ty: BOSS_Y, t: 0, dur: 0.3, color: '#d8ffe0', m: m, dmg: dmg, crit: crit });
       } else {
         // 近战：刀光
         var ang = Math.atan2(BOSS_Y - m.y, BOSS_X - m.x);
-        this.fx.burst(m.x + Math.cos(ang) * 26, m.y + Math.sin(ang) * 26, { n: 5, color: def.color, speed: 220, angle: ang, spread: 0.6, life: 0.25, shape: 'spark' });
-        this.projs.push({ kind: 'slash', x: m.x + Math.cos(ang) * 22, y: m.y + Math.sin(ang) * 22, ang: ang, t: 0, dur: 0.16, color: def.color });
+        this.fx.burst(m.x + Math.cos(ang) * 26, m.y - 26 + Math.sin(ang) * 26, { n: 5, color: def.color, speed: 220, angle: ang, spread: 0.6, life: 0.25, shape: 'spark' });
+        this.projs.push({ kind: 'slash', x: m.x + Math.cos(ang) * 22, y: m.y - 26 + Math.sin(ang) * 22, ang: ang, t: 0, dur: 0.16, color: def.color });
         A.play('slash', 0.08);
         self.hitBoss(m, dmg, crit);
       }
@@ -824,7 +924,7 @@
     if (this.ultCd > 0 || this.state !== 'fight') return;
     this.ultCd = 25;
     this.ultT = 8;
-    if (this.tut && this.tut.step === 4) this.tutNext();
+    if (this.tut && this.tut.step === 3) this.tut.ultUsed = true;
     A.play('ult');
     this.fx.flash('#ff9a3a', 0.4, 1.5);
     this.fx.shake(8, 0.4);
@@ -835,89 +935,130 @@
     P.vibrate(20);
   };
 
-  // ---------------- 新手教学 ----------------
+  // ---------------- 新手教学：躲开 → 回身 → 抢输出 ----------------
   RaidBattle.prototype.tutNext = function () {
     var tu = this.tut;
     tu.step++;
     tu.t = 0;
     tu.result = null;
     tu.spawned = false;
+    tu.doneT = 0;
+    tu.tries = 0;
+    tu.inT = 0;
     A.play('click');
-    if (tu.step === 5) {
+    if (tu.step === 4) {
+      this.save.tutRaid2 = true;
       this.save.tutRaid = true;
       writeSave(this.save);
-      this.mechT = 3;
-      this.ultCd = 0;
-      this.banner = { s: '开打！击败首领就能开箱拿装备', t: 2.4, c: '#ffd27a' };
+      this.mechT = 3.5;
+      this.banner = { s: '教学完成！击败首领就能开箱拿装备', t: 2.4, c: '#ffd27a' };
     }
+  };
+
+  RaidBattle.prototype.meleeInRange = function () {
+    var ok = true;
+    for (var i = 0; i < this.party.length; i++) {
+      var m = this.party[i];
+      if (m.def.id !== 'tank' && m.def.id !== 'rogue') continue;
+      if (m.dead || U.dist(m.x, m.y, BOSS_X, BOSS_Y) - BOSS_R > m.def.range) ok = false;
+    }
+    return ok;
   };
 
   RaidBattle.prototype.updateTutorial = function (dt) {
     var tu = this.tut;
     tu.t += dt;
-    var alive = this.alive();
-    var cen = { x: this.rally.x, y: this.rally.y };
-    if (tu.step === 1 && tu.dragged > 160 && tu.t > 0.8) this.tutNext();
-    else if (tu.step === 2) {
-      if (!tu.spawned && tu.t > 0.4) {
+    var B = this.B;
+    if (tu.step === 1) {
+      // 躲开：红圈罩住全队，必须拖出去
+      if (!tu.spawned && tu.t > 0.5) {
         tu.spawned = true;
-        this.hazards.push({ type: 'circle', x: cen.x, y: cen.y + 10, r: 95, t: 0, dur: 3.2, dmg: 120, color: this.B.burn, tut: true });
-        this.cast = { name: this.B.mechs.pools.name, t: 0, dur: 3.2 };
+        this.addHazards([{ type: 'circle', key: 'pools', x: this.rally.x, y: this.rally.y + 10, r: 100, t: 0, dur: 3.2, dmg: 90, color: B.burn, tut: true }], B.mechs.pools.name);
+        this.cast = { name: B.mechs.pools.name, t: 0, dur: 3.2 };
         A.play('warn');
       }
       if (tu.result && !tu.doneT) tu.doneT = tu.t;
-      if (tu.doneT && tu.t - tu.doneT > 1.6) { tu.doneT = 0; this.tutNext(); }
+      if (tu.doneT && tu.t - tu.doneT > 1.6) {
+        if (tu.result === 'ok' || tu.tries >= 2) this.tutNext();
+        else { tu.tries++; tu.result = null; tu.spawned = false; tu.doneT = 0; tu.t = 0.2; }
+      }
+    } else if (tu.step === 2) {
+      // 回身：近战回到首领脚下
+      if (this.meleeInRange()) tu.inT += dt; else tu.inT = 0;
+      if (tu.inT > 0.7 && !tu.doneT) { tu.doneT = tu.t; A.play('levelup'); }
+      if (tu.doneT && tu.t - tu.doneT > 1.4) this.tutNext();
     } else if (tu.step === 3) {
-      if (!tu.spawned && tu.t > 0.4) {
+      // 抢输出：躲开新星 → 破绽窗口 → 回身开战旗
+      if (!tu.spawned && tu.t > 0.6) {
         tu.spawned = true;
-        var sx = cen.x > 270 ? cen.x - 150 : cen.x + 150;
-        this.hazards.push({ type: 'soak', x: sx, y: U.clamp(cen.y + 40, 430, 640), r: 85, t: 0, dur: 4.2, dmg: 60, color: '#ffd84a', big: true, tut: true });
-        this.cast = { name: this.B.mechs.soak.name, t: 0, dur: 4.2 };
+        this.addHazards([{ type: 'circle', key: 'nova', x: BOSS_X, y: BOSS_Y, r: 300, t: 0, dur: 3.6, dmg: 90, color: B.burn, big: true, nova: true, tut: true }], B.mechs.nova.name);
+        this.cast = { name: B.mechs.nova.name, t: 0, dur: 3.6 };
         A.play('warn');
       }
-      if (tu.result && !tu.doneT) tu.doneT = tu.t;
-      if (tu.doneT && tu.t - tu.doneT > 1.6) { tu.doneT = 0; this.tutNext(); }
+      if (tu.result && this.vulnT <= 0 && !tu.doneT) {
+        tu.doneT = tu.t;
+        tu.burst = this.vulnDmg;
+      }
+      if (tu.doneT && tu.t - tu.doneT > 2.8) this.tutNext();
     }
     if (this.cast) { this.cast.t += dt; if (this.cast.t >= this.cast.dur) this.cast = null; }
-    void alive;
   };
 
   RaidBattle.prototype.renderTutorial = function (ctx) {
     var tu = this.tut;
-    if (!tu || tu.step >= 5 || this.state !== 'fight') return;
+    if (!tu || tu.step >= 4 || this.state !== 'fight') return;
     var t = this.t;
     var cx = this.rally.x, cy = this.rally.y;
     var a = Math.min(1, tu.t * 4);
     ctx.save();
     ctx.globalAlpha = a;
-    G.text(ctx, '新手教学 ' + (tu.step + 1) + '/5', 270, 104, { size: 15, weight: 'bold', align: 'center', color: '#ffd27a', stroke: '#000', strokeWidth: 4 });
+    var titles = ['', '第 1 课 · 躲开', '第 2 课 · 回身', '第 3 课 · 抢输出'];
+    if (tu.step > 0) G.text(ctx, titles[tu.step], 270, 104, { size: 16, weight: 'bold', align: 'center', color: '#ffd27a', stroke: '#000', strokeWidth: 4 });
     if (tu.step === 0) {
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fillRect(0, ARENA_TOP, 540, ARENA_BOTTOM - ARENA_TOP);
-      G.glow(ctx, cx, cy, 120, '#ffd27a', 0.25);
-      G.tip(ctx, '这是你的 5 人小队：坦克扛怪、治疗加血、3 个输出打首领。他们会自动战斗！', 270, 560, 460, { sub: '点击屏幕继续' });
-      G.hand(ctx, cx + 20, cy - 10, t);
+      G.glow(ctx, cx, cy - 20, 120, '#ffd27a', 0.25);
+      G.tip(ctx, '这是你的 5 人小队，会自动扛怪、治疗、输出。你只负责一件事：拖动走位。', 270, 560, 460, { sub: '点击屏幕继续' });
+      G.hand(ctx, cx + 20, cy - 30, t);
     } else if (tu.step === 1) {
-      G.tip(ctx, '你只需要做一件事：按住屏幕拖动，整个小队会跟着你走', 270, 676, 460);
-      var hx = 270 + Math.sin(t * 2.2) * 110;
-      ctx.strokeStyle = 'rgba(255,230,160,0.35)'; ctx.lineWidth = 3; ctx.setLineDash([6, 8]);
-      ctx.beginPath(); ctx.moveTo(160, 600); ctx.lineTo(380, 600); ctx.stroke(); ctx.setLineDash([]);
-      G.hand(ctx, hx, 588, 0.1);
-      G.bar(ctx, 170, 650, 200, 10, Math.min(1, tu.dragged / 160), '#ffb347', { border: false });
+      if (tu.result === 'ok') G.tip(ctx, '漂亮！全队躲开，一滴血都没掉', 270, 676, 400, { border: '#4ad04a' });
+      else if (tu.result === 'hit') G.tip(ctx, tu.tries >= 2 ? '有人被烫到了，没关系，继续下一课' : '有人被烫到了！再来一次：脚下光圈全部出圈才算安全', 270, 676, 460, { border: '#ff5a5a' });
+      else {
+        G.tip(ctx, '红圈要炸了！按住屏幕拖动，把全队拖出红圈', 270, 676, 440, { border: '#ff5a5a' });
+        var h = this.hazards[0];
+        if (h) {
+          var dir = h.x > 270 ? -1 : 1;
+          var k = (t * 0.8) % 1;
+          G.hand(ctx, h.x + dir * k * (h.r + 50), h.y + 20, 0.1);
+        }
+      }
     } else if (tu.step === 2) {
-      if (tu.result === 'ok') G.tip(ctx, '漂亮！躲开红圈就不会掉血', 270, 676, 380, { border: '#4ad04a' });
-      else if (tu.result === 'hit') G.tip(ctx, '被烫到了！下次看到红圈早点拖走', 270, 676, 400, { border: '#ff5a5a' });
-      else G.tip(ctx, '红圈马上要爆炸！拖动小队，全部离开红圈！', 270, 676, 440, { border: '#ff5a5a' });
-      if (!tu.result) G.hand(ctx, cx + (cx > 270 ? -130 : 130), cy + 20, t);
+      // 近战范围提示圈
+      var R = BOSS_R + 110;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(125,255,154,' + (0.5 + Math.sin(t * 5) * 0.25) + ')';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([12, 10]);
+      ctx.beginPath(); ctx.arc(BOSS_X, BOSS_Y, R, 0.15, Math.PI - 0.15); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      G.text(ctx, '近战输出区', BOSS_X, BOSS_Y + R + 18, { size: 16, weight: 'bold', align: 'center', color: '#7dff9a', stroke: '#000', strokeWidth: 4 });
+      if (tu.doneT) G.tip(ctx, '对！近战贴着首领，伤害才打得出来', 270, 676, 420, { border: '#4ad04a' });
+      else {
+        G.tip(ctx, '躲完要回身！「铁砧」「影七」是近战，离远了就打不到。把小队拖回首领脚下', 270, 664, 470, { border: '#ffb347' });
+        G.hand(ctx, BOSS_X, BOSS_Y + BOSS_R + 70, t);
+      }
     } else if (tu.step === 3) {
-      var h = this.hazards[0];
-      if (tu.result === 'ok') G.tip(ctx, '完美分摊！黄圈 = 大家站一起', 270, 676, 400, { border: '#4ad04a' });
-      else if (tu.result === 'hit') G.tip(ctx, '有人没站进去，全团都受伤了！', 270, 676, 400, { border: '#ff5a5a' });
-      else G.tip(ctx, '黄圈正好相反：把全员拖进黄圈，一起分摊伤害！', 270, 676, 460, { border: '#ffd84a' });
-      if (!tu.result && h) G.hand(ctx, h.x, h.y, t);
-    } else if (tu.step === 4) {
-      G.tip(ctx, '大招充能好了！点右下角按钮，全队伤害暴增 8 秒', 270, 676, 440);
-      G.hand(ctx, 462, 862, t);
+      if (tu.doneT) {
+        G.tip(ctx, '破绽 6 秒打出 ' + U.fmt(tu.burst || 0) + ' 伤害！以后看到破绽，就回身开战旗', 270, 664, 470, { border: '#4ad04a' });
+      } else if (this.vulnT > 0) {
+        G.tip(ctx, '首领力竭露出破绽，伤害×2！冲回去，按战旗！', 270, 676, 440, { border: '#ffcf4a' });
+        if (!tu.ultUsed) G.hand(ctx, 462, 862, t);
+        else G.hand(ctx, BOSS_X, BOSS_Y + BOSS_R + 70, t);
+      } else if (!tu.result) {
+        G.tip(ctx, '首领要放大招「' + this.B.mechs.nova.name + '」！先往下跑，离开大红圈', 270, 676, 460, { border: '#ff5a5a' });
+        G.hand(ctx, cx, Math.min(cy + 60 + ((t * 0.8) % 1) * 120, 700), 0.1);
+      }
     }
     ctx.restore();
   };
@@ -1030,6 +1171,7 @@
     // 小队
     var ult = this.ultT > 0;
     for (i = 0; i < this.party.length; i++) drawMember(ctx, this.party[i], this.t, { ult: ult });
+    this.renderMemberStatus(ctx);
     // 投射物
     for (i = 0; i < this.projs.length; i++) {
       var p = this.projs[i];
@@ -1088,7 +1230,9 @@
       G.text(ctx, '目标：击败首领  ·  躲开红色  ·  黄圈集合', 270, ARENA_BOTTOM - 12, { size: 14, align: 'center', color: 'rgba(255,220,170,0.75)' });
     }
     this.renderHud(ctx);
+    this.renderTeamResult(ctx);
     this.renderTutorial(ctx);
+    this.renderSoakHint(ctx);
     this.fx.renderFlash(ctx);
 
     if (this.state === 'intro') {
@@ -1097,7 +1241,7 @@
       ctx.globalAlpha = a;
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.fillRect(0, 380, 540, 120);
-      G.text(ctx, '第 ' + this.boss.tier + ' 层' + (this.farm ? '（刷装备）' : ''), 270, 415, { size: 22, align: 'center', color: '#ffd9a0' });
+      G.text(ctx, '第 ' + this.boss.tier + ' 层' + (this.farm ? '（刷装备）' : '') + (this.attempt > 1 ? ' · 第 ' + this.attempt + ' 次挑战' : ''), 270, 415, { size: 22, align: 'center', color: '#ffd9a0' });
       G.text(ctx, B.name, 270, 455, { size: 34, weight: 'bold', align: 'center', color: B.c1, stroke: '#000', strokeWidth: 5 });
       ctx.restore();
     }
@@ -1136,24 +1280,111 @@
     void self;
   };
 
+  /** 角色状态标记：站在红圈里显示「!」，站在黄圈里显示「✓」 */
+  RaidBattle.prototype.renderMemberStatus = function (ctx) {
+    for (var i = 0; i < this.party.length; i++) {
+      var m = this.party[i];
+      if (m.dead) continue;
+      var danger = false, soak = false;
+      for (var j = 0; j < this.hazards.length; j++) {
+        var h = this.hazards[j];
+        if (!this.inHazard(h, m)) continue;
+        if (h.type === 'soak') soak = true; else danger = true;
+      }
+      if (!danger) {
+        for (var b = 0; b < this.burns.length; b++) if (U.dist(m.x, m.y, this.burns[b].x, this.burns[b].y) < this.burns[b].r) danger = true;
+      }
+      if (danger) {
+        var p = 1 + Math.sin(this.t * 14) * 0.12;
+        ctx.save();
+        ctx.strokeStyle = '#ff2a2a'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.ellipse(m.x, m.y, 19 * p, 7 * p, 0, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(m.x, m.y - 80, 11, 0, Math.PI * 2);
+        ctx.fillStyle = '#ff2a2a'; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+        G.text(ctx, '!', m.x, m.y - 79, { size: 16, weight: 'bold', align: 'center', color: '#fff', shadow: false });
+        ctx.restore();
+      } else if (soak) {
+        ctx.save();
+        ctx.beginPath(); ctx.arc(m.x, m.y - 80, 10, 0, Math.PI * 2);
+        ctx.fillStyle = '#2f9e4a'; ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(m.x - 5, m.y - 80); ctx.lineTo(m.x - 1, m.y - 76); ctx.lineTo(m.x + 5, m.y - 84); ctx.stroke();
+        ctx.restore();
+      }
+    }
+    // 破绽：首领周围的金色裂纹环 + 倒计时
+    if (this.vulnT > 0) {
+      var k = this.vulnT / (this.vulnMax || 5);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,207,74,' + (0.6 + Math.sin(this.t * 10) * 0.3) + ')';
+      ctx.lineWidth = 6;
+      ctx.setLineDash([16, 8]);
+      ctx.beginPath(); ctx.arc(BOSS_X, BOSS_Y, BOSS_R + 18, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      G.text(ctx, '破绽 ×2  ' + this.vulnT.toFixed(1) + 's', BOSS_X, BOSS_Y + BOSS_R + 44, { size: 20, weight: 'bold', align: 'center', color: '#ffcf4a', stroke: '#3a2000', strokeWidth: 5 });
+    }
+  };
+
+  /** 红圈结算：先显示全队结果，个人伤害数字稍后再飘 */
+  RaidBattle.prototype.renderTeamResult = function (ctx) {
+    var r = this.teamRes;
+    if (!r) return;
+    var age = r.max - r.t;
+    var a = Math.min(1, r.t * 3);
+    var sc = 1 + Math.max(0, 0.35 - age * 2);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(r.x, r.y);
+    ctx.scale(sc, sc);
+    ctx.font = G.font(26, 'bold');
+    var w = Math.max(ctx.measureText(r.s).width, 120) + 40;
+    G.roundRect(ctx, -w / 2, -30, w, r.sub ? 64 : 44, 14);
+    ctx.fillStyle = 'rgba(8,6,12,0.82)'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = r.c; ctx.stroke();
+    G.text(ctx, r.s, 0, -8, { size: 26, weight: 'bold', align: 'center', color: r.c, shadow: false });
+    if (r.sub) G.text(ctx, r.sub, 0, 20, { size: 14, align: 'center', color: '#eee', shadow: false });
+    ctx.restore();
+  };
+
+  RaidBattle.prototype.renderSoakHint = function (ctx) {
+    if (!this.soakHint) return;
+    var h = null;
+    for (var i = 0; i < this.hazards.length; i++) if (this.hazards[i].type === 'soak') h = this.hazards[i];
+    if (!h) return;
+    G.tip(ctx, '新机制 · 黄圈：全员站进去一起分摊！圈上数字凑满才安全', 270, 664, 470, { border: '#ffd84a' });
+    G.hand(ctx, h.x, h.y, this.t * 2);
+  };
+
   RaidBattle.prototype.drawHazard = function (ctx, h) {
     var k = U.clamp(h.t / h.dur, 0, 1);
     var col = h.color;
-    var blink = 0.55 + Math.sin(this.t * (10 + k * 20)) * 0.2;
+    var blink = 0.85 + Math.sin(this.t * (10 + k * 20)) * 0.15;
+    var self = this;
     ctx.save();
     if (h.type === 'circle' || h.type === 'soak') {
       ctx.fillStyle = U.rgba(col, 0.16);
       ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = U.rgba(col, 0.32);
       ctx.beginPath(); ctx.arc(h.x, h.y, h.r * k, 0, Math.PI * 2); ctx.fill();
+      // 边界：深色底线 + 亮色描边，任何地面上都清楚（描边中心 = 判定半径）
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.lineWidth = 8;
+      ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.stroke();
       ctx.strokeStyle = U.rgba(col, blink);
-      ctx.lineWidth = h.type === 'soak' ? 5 : 3;
-      if (h.type === 'soak') ctx.setLineDash([12, 8]);
+      ctx.lineWidth = 4;
+      if (h.type === 'soak') ctx.setLineDash([14, 8]);
       ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
       if (h.type === 'soak') {
-        var inCount = this.alive().filter(function (m) { return U.dist(m.x, m.y, h.x, h.y) <= h.r + 6; }).length;
-        G.text(ctx, '集合分摊 ' + inCount + '/' + this.alive().length, h.x, h.y - h.r - 16, { size: 18, weight: 'bold', align: 'center', color: '#ffd84a', stroke: '#000' });
+        var inCount = this.alive().filter(function (m) { return self.inHazard(h, m); }).length;
+        var need = this.alive().length;
+        var full = inCount >= need;
+        G.roundRect(ctx, h.x - 62, h.y - h.r - 44, 124, 34, 17);
+        ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fill();
+        ctx.lineWidth = 2.5; ctx.strokeStyle = full ? '#7dff9a' : '#ffd84a'; ctx.stroke();
+        G.text(ctx, '分摊 ' + inCount + '/' + need, h.x, h.y - h.r - 27, { size: 22, weight: 'bold', align: 'center', color: full ? '#7dff9a' : '#ffd84a', shadow: false });
         // 下落的陨石
         var my = U.lerp(h.y - 500, h.y, U.easeInCubic(k));
         G.glow(ctx, h.x, my, 40, '#ffd84a', 0.9);
@@ -1166,16 +1397,18 @@
       ctx.fillRect(0, h.y - h.h / 2, 540, h.h);
       ctx.fillStyle = U.rgba(col, 0.3);
       ctx.fillRect(0, h.y - h.h / 2, 540 * k, h.h);
-      ctx.strokeStyle = U.rgba(col, blink);
-      ctx.lineWidth = 3;
-      ctx.strokeRect(-4, h.y - h.h / 2, 548, h.h);
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)'; ctx.lineWidth = 8;
+      ctx.strokeRect(-6, h.y - h.h / 2, 552, h.h);
+      ctx.strokeStyle = U.rgba(col, blink); ctx.lineWidth = 4;
+      ctx.strokeRect(-6, h.y - h.h / 2, 552, h.h);
     } else if (h.type === 'vband') {
       ctx.fillStyle = U.rgba(col, 0.16);
       ctx.fillRect(h.x - h.w / 2, ARENA_TOP, h.w, ARENA_BOTTOM - ARENA_TOP);
       ctx.fillStyle = U.rgba(col, 0.3);
       ctx.fillRect(h.x - h.w / 2, ARENA_TOP, h.w, (ARENA_BOTTOM - ARENA_TOP) * k);
-      ctx.strokeStyle = U.rgba(col, blink);
-      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)'; ctx.lineWidth = 8;
+      ctx.strokeRect(h.x - h.w / 2, ARENA_TOP, h.w, ARENA_BOTTOM - ARENA_TOP);
+      ctx.strokeStyle = U.rgba(col, blink); ctx.lineWidth = 4;
       ctx.strokeRect(h.x - h.w / 2, ARENA_TOP, h.w, ARENA_BOTTOM - ARENA_TOP);
     }
     ctx.restore();
@@ -1202,6 +1435,7 @@
     // 读条
     if (this.cast) {
       var ck = this.cast.t / this.cast.dur;
+      if (this.vulnT > 0) ck = 1;
       G.bar(ctx, 170, BOSS_Y + BOSS_R + 14, 200, 14, ck, '#ffb347', { bg: 'rgba(0,0,0,0.7)' });
       G.text(ctx, this.cast.name, 270, BOSS_Y + BOSS_R + 21, { size: 12, weight: 'bold', align: 'center', color: '#fff', shadow: false });
     }
@@ -1264,22 +1498,53 @@
     ctx.restore();
   };
 
+  var DEATH_ADVICE = {
+    pools: '红圈一出现就把队伍拖走，别等它炸',
+    burn: '红圈炸完地面还会烧 7 秒，别走回火里',
+    sweep: '横扫是一整条带子，往带子窄的方向撤最快',
+    nova: '大红圈以首领为中心，读条时往远处跑',
+    soak: '黄圈要全员站进去，看圈上人数凑满再停',
+    melee: '坦克倒下后首领会追打脆皮，先保住坦克别站圈里',
+  };
+
+  RaidBattle.prototype.retry = function () {
+    // 原装备、从头开始：首领满血，存档与装备不变
+    this.app.goto(new RaidBattle(this.save, this.boss.tier, this.farm, this.attempt + 1));
+  };
+
   RaidBattle.prototype.renderWipe = function (ctx) {
     var self = this;
-    ctx.fillStyle = 'rgba(10,8,14,0.78)';
+    ctx.fillStyle = 'rgba(10,8,14,0.86)';
     ctx.fillRect(0, 0, 540, 960);
-    G.text(ctx, '团灭了……', 270, 300, { size: 48, weight: 'bold', align: 'center', color: '#ff6a6a', stroke: '#000', strokeWidth: 6 });
+    G.text(ctx, '团灭了……', 270, 150, { size: 44, weight: 'bold', align: 'center', color: '#ff6a6a', stroke: '#000', strokeWidth: 6 });
     var pct = this.bossHp / this.boss.maxHp;
-    G.text(ctx, '首领剩余血量 ' + (pct * 100).toFixed(1) + '%', 270, 360, { size: 22, align: 'center', color: '#fff' });
-    G.text(ctx, pct < 0.2 ? '[影七]：就差一点！再来一次绝对能过！' : '[铁砧]：大家注意躲红圈，黄圈记得集合。', 270, 400, { size: 17, align: 'center', color: '#ffcf8a' });
+    G.text(ctx, '首领剩余血量 ' + (pct * 100).toFixed(1) + '%  ·  用时 ' + U.fmtTime(this.fightTime), 270, 200, { size: 18, align: 'center', color: '#ddd' });
+    // 首个减员复盘
+    var first = this.deaths[0];
+    if (first) {
+      var m = first.m;
+      G.panel(ctx, 30, 232, 480, 196, { border: '#ff6a5a', glow: 'rgba(255,90,80,0.4)', glowBlur: 14 });
+      G.text(ctx, '首个减员', 52, 260, { size: 16, weight: 'bold', color: '#ff8a7a' });
+      drawPortrait(ctx, m.def, 92, 322, 34, false);
+      G.text(ctx, m.def.name + '（' + m.def.role + '）', 142, 300, { size: 22, weight: 'bold', color: m.def.color });
+      G.text(ctx, '第 ' + U.fmtTime(first.t) + ' 阵亡', 142, 330, { size: 16, color: '#ddd' });
+      G.text(ctx, '死因：' + first.cause.label, 142, 358, { size: 18, weight: 'bold', color: '#ffcf8a' });
+      G.paragraph(ctx, '下次：' + (DEATH_ADVICE[first.cause.key] || '注意躲开红色区域'), 52, 398, 440, { size: 16, color: '#fff' });
+      // 减员时间线
+      var tl = this.deaths.slice(1, 5).map(function (d) { return d.m.def.name + ' ' + U.fmtTime(d.t); }).join('  →  ');
+      if (tl) G.text(ctx, '随后：' + tl, 270, 448, { size: 13, align: 'center', color: '#999' });
+    }
+    this.ui.button(ctx, 60, 480, 420, 92, '原装备重新挑战', function () { self.retry(); }, {
+      color: '#c8602a', sub: '首领满血、从头再来 · 第 ' + (this.attempt + 1) + ' 次挑战', size: 28, pulse: true, id: 'retry',
+    });
     if (!this.revived) {
-      this.ui.button(ctx, 90, 470, 360, 92, '引魂复活', function () { self.revive(); }, {
-        color: '#2f7fd6', ad: true, sub: '全员满血原地复活 · 首领血量保留', size: 28, pulse: true, id: 'revive',
+      this.ui.button(ctx, 60, 592, 260, 72, '引魂复活', function () { self.revive(); }, {
+        color: '#2f7fd6', ad: true, sub: '原地复活 · 首领血量保留', size: 20, id: 'revive',
       });
     } else {
-      G.text(ctx, '本场已使用过引魂复活', 270, 515, { size: 18, align: 'center', color: '#999' });
+      G.text(ctx, '本场已用过引魂复活', 190, 628, { size: 15, align: 'center', color: '#999' });
     }
-    this.ui.button(ctx, 150, 600, 240, 64, '撤退', function () { self.retreat(); }, { color: '#4a4452', size: 22, sub: null, id: 'retreat' });
+    this.ui.button(ctx, 336, 592, 144, 72, '撤退', function () { self.retreat(); }, { color: '#4a4452', size: 20, id: 'retreat' });
   };
 
   RaidBattle.prototype.renderPause = function (ctx) {
